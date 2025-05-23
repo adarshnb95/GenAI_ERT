@@ -1,0 +1,58 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE/editor files
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Data and logs
+ingestion/data/
+*.log
+
+# Secrets & config
+.env
+*.secret
+credentials.json
+
+# Cache and indexes
+*.sqlite3
+*.db
+*.lock
+*.cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Docker
+*.tar
+docker-compose.override.yml
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Streamlit’s cache
+.streamlit/
+
+# Coverage reports
+htmlcov/
+.coverage
+
+# Checkpoints and temporary files
+# These are typically large files and should not be versioned
+classifier/checkpoint/
+classifier/checkpoint-*/
