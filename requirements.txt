@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+streamlit
+openai
+sentence-transformers
+faiss-cpu
+transformers
+pytest
