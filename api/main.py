@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
 import uvicorn
+from summarization.summarize import build_faiss_index, summarize_text, answer_question
 
 # Ingestion functions
 from ingestion.edgar_fetch import get_latest_filings, download_filing_index, choose_and_download
@@ -53,12 +54,19 @@ async def classify(request: ClassifyRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Placeholder endpoint for summarization
+
+
 @app.post("/summarize")
 async def summarize(request: ClassifyRequest):
-    # summary = summarize_text(request.text)
-    # return {"summary": summary}
-    raise HTTPException(status_code=501, detail="Summarization endpoint not yet implemented")
+    # Re-build index if needed (or schedule separately)
+    # build_faiss_index(reset=False)
+    summary = summarize_text(request.text)
+    return {"summary": summary}
+
+@app.post("/ask")
+async def ask(request: ClassifyRequest):
+    answer = answer_question(request.text)
+    return {"answer": answer}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
