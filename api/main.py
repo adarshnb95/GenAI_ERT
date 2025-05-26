@@ -25,6 +25,11 @@ class IngestRequest(BaseModel):
 class ClassifyRequest(BaseModel):
     text: str
 
+@app.on_event("startup")
+async def startup_event():
+    # Build (or reload) the FAISS index before serving any requests
+    build_faiss_index(reset=False)
+
 @app.post("/ingest")
 async def ingest(request: IngestRequest):
     cik = None

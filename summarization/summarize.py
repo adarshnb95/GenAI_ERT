@@ -10,6 +10,7 @@ import openai
 # Paths & globals
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 VECTOR_STORE = Path(__file__).parent / "faiss_index"
+METADATA_STORE = VECTOR_STORE.with_suffix(".meta.json")
 DOCS_DIR    = Path(__file__).parent.parent / "ingestion" / "data"
 OPENAI_KEY  = os.getenv("OPENAI_API_KEY")
 
@@ -17,70 +18,104 @@ OPENAI_KEY  = os.getenv("OPENAI_API_KEY")
 embedder = SentenceTransformer(EMBED_MODEL)
 openai.api_key = OPENAI_KEY
 
-def build_faiss_index(reset: bool = False):
-    """Read all classified filings, embed their chunks, and (re)build the FAISS index."""
+
+def build_faiss_index(reset: bool = False, chunk_size: int = 1000):
+    """
+    Read all filings, split into chunks, embed, and build the FAISS index.
+    """
     VECTOR_STORE.parent.mkdir(exist_ok=True)
     if reset and VECTOR_STORE.exists():
         VECTOR_STORE.unlink()
-
-    # Collect text chunks
+    # Collect text chunks and metadata
     texts = []
     metadata = []
-    for file in DOCS_DIR.glob("*.xbrl"):  # or .htm/.html if you prefer
-        content = file.read_text(encoding="utf-8", errors="ignore")
-        # simple split into 500-word chunks
-        for i, chunk in enumerate(content.split("\n\n")):
-            texts.append(chunk)
-            metadata.append({"source": file.name, "chunk_id": i})
-
+    # Supported file extensions
+    exts = ['.xbrl', '.html', '.htm']
+    for file in DOCS_DIR.iterdir():
+        if file.suffix.lower() in exts:
+            content = file.read_text(encoding="utf-8", errors="ignore").strip()
+            if not content:
+                continue
+            # Split into fixed-size chunks
+            for i in range(0, len(content), chunk_size):
+                chunk = content[i:i+chunk_size]
+                texts.append(chunk)
+                metadata.append({
+                    "source": file.name,
+                    "chunk_index": i // chunk_size
+                })
+    if not texts:
+        print("No documents found to index.")
+        return
     # Embed
     vectors = embedder.encode(texts, show_progress_bar=True, convert_to_numpy=True)
-
-    # Build FAISS
     dim = vectors.shape[1]
+    # Build FAISS index
     index = faiss.IndexFlatL2(dim)
     index.add(vectors)
     faiss.write_index(index, str(VECTOR_STORE))
-
     # Save metadata
-    with open(VECTOR_STORE.with_suffix(".meta.json"), "w") as f:
+    with open(METADATA_STORE, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
+    print(f"Built FAISS index with {len(texts)} chunks.")
+
 
 def retrieve_context(question: str, top_k: int = 5) -> List[str]:
-    """Given a question, pull top_k chunks from the FAISS store."""
+    """
+    Given a question, retrieve top_k chunks from the FAISS store.
+    """
+    if not VECTOR_STORE.exists() or not METADATA_STORE.exists():
+        raise RuntimeError("FAISS index not found. Please run build_faiss_index() first.")
+    # Load index and metadata
     index = faiss.read_index(str(VECTOR_STORE))
-    with open(VECTOR_STORE.with_suffix(".meta.json")) as f:
+    with open(METADATA_STORE, encoding="utf-8") as f:
         metadata = json.load(f)
-
+    # Embed question
     q_vec = embedder.encode([question], convert_to_numpy=True)
     D, I = index.search(q_vec, top_k)
-    return [metadata[idx]["source"] + f" [chunk {metadata[idx]['chunk_id']}]" 
-            + "\n\n" + 
-            DOCS_DIR.joinpath(metadata[idx]["source"]).read_text()[metadata[idx]["chunk_id"]*500:(metadata[idx]["chunk_id"]+1)*500]
-            for idx in I[0]]
+    contexts = []
+    for idx in I[0]:
+        entry = metadata[idx]
+        src = entry["source"]
+        chunk_idx = entry["chunk_index"]
+        file_path = DOCS_DIR / src
+        full = file_path.read_text(encoding="utf-8", errors="ignore")
+        start = chunk_idx * chunk_size if 'chunk_size' in locals() else 0
+        end = start + chunk_size if 'chunk_size' in locals() else None
+        snippet = full[start:end]
+        contexts.append(f"Source: {src}, chunk {chunk_idx}\n{snippet}")
+    return contexts
+
 
 def summarize_text(text: str) -> str:
-    """Call GPT to generate a multi-level summary for a given text."""
+    """
+    Generate a one-sentence summary and three bullet-point highlights via GPT.
+    """
     prompt = f"""
         You are an equity research assistant. Please generate:
         1) A one-sentence executive summary.
         2) Three bullet-point key highlights.
         Text:
-        \"\"\"{text}\"\"\"
+        {text}
         """
     resp = openai.ChatCompletion.create(
         model="gpt-4",
-        messages=[{"role":"system","content":"You summarize financial documents."},
-                  {"role":"user","content":prompt}],
+        messages=[
+            {"role": "system", "content": "You summarize financial documents."},
+            {"role": "user", "content": prompt}
+        ],
         temperature=0.2,
         max_tokens=400
     )
     return resp.choices[0].message.content.strip()
 
+
 def answer_question(question: str) -> str:
-    """Full RAG: retrieve context, then ask GPT to answer."""
-    ctx = retrieve_context(question, top_k=5)
-    joined = "\n\n---\n\n".join(ctx)
+    """
+    Full RAG: retrieve context chunks, then ask GPT to answer the question.
+    """
+    contexts = retrieve_context(question)
+    joined = "\n\n---\n\n".join(contexts)
     prompt = f"""
         You are a financial analyst assistant. Use the following document excerpts to answer the question.
         Excerpts:
@@ -90,8 +125,10 @@ def answer_question(question: str) -> str:
         """
     resp = openai.ChatCompletion.create(
         model="gpt-4",
-        messages=[{"role":"system","content":"You answer financial queries based on provided context."},
-                  {"role":"user","content":prompt}],
+        messages=[
+            {"role": "system", "content": "You answer financial queries based on provided context."},
+            {"role": "user", "content": prompt}
+        ],
         temperature=0.0,
         max_tokens=300
     )
