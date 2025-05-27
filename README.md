@@ -101,7 +101,7 @@ GenAI_ERT/
    uvicorn api.main:app --reload
    ```
 
-Visit `http://127.0.0.1:8000/docs` for interactive API docs.
+Visit `http://127.0.0.1:8000/docs` for interactive API docs. (Currently unavailable)
 
 ---
 
@@ -125,12 +125,9 @@ Visit `http://127.0.0.1:8000/docs` for interactive API docs.
 
 ---
 
-## 📅 Roadmap
+## Tips
 
-1. **Week 1–2**: Complete classification & basic API (ingest, classify).
-2. **Week 3–4**: Build summarization & RAG pipeline; integrate FAISS embedding store.
-3. **Week 5–6**: Add trend analysis, sentiment, forecasting modules.
-4. **Deployment**: Containerize with Docker & deploy to Heroku/Vercel.
+1. I noticed that the SEC files had already classified the files as 10-K and 10-Q, so I created a generate_labels.py that helped me generate test data using the official classification.
 
 ---
 
