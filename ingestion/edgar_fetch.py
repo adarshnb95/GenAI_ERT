@@ -80,25 +80,34 @@ def download_filing_component(cik: str, accession: str, component_name: str) -> 
     print(f"Saved component: {component_name}")
 
 
-def choose_and_download(cik: str, accession: str, index_path: str) -> None:
+def choose_and_download(cik: str, accession: str, index_path: str) -> str:
     """
-    Parse the index JSON to find the primary XBRL or HTML filing and download it.
+    Parse the index JSON to find the primary XBRL or HTML filing,
+    download it, and return its local filepath.
     """
-    with open(local_path, 'r', encoding='utf-8', errors='ignore') as f:
-        content = f.read(2000)
-    label = classify_text(content)
-    print(f"Classified {component_name} as {label}")
-    # Look for XBRL first
+    with open(index_path, 'r') as f:
+        index_data = json.load(f)
+
+    # Try XBRL first
     for entry in index_data.get('directory', {}).get('item', []):
         name = entry.get('name', '')
         if name.lower().endswith('.xbrl'):
-            return download_filing_component(cik, accession, name)
-    # Fallback to HTML
-    for entry in index_data.get('directory', {}).get('item', []):
-        name = entry.get('name', '')
-        if name.lower().endswith('.htm') or name.lower().endswith('.html'):
-            return download_filing_component(cik, accession, name)
-    print(f"No XBRL/HTML component found for {accession}")
+            download_filing_component(cik, accession, name)
+            break
+    else:
+        # Fallback to HTML
+        for entry in index_data.get('directory', {}).get('item', []):
+            name = entry.get('name', '')
+            if name.lower().endswith(('.htm', '.html')):
+                download_filing_component(cik, accession, name)
+                break
+        else:
+            print(f"No XBRL/HTML component found for {accession}")
+            return ''
+
+    # Now that it’s downloaded, build the full local path
+    local_path = os.path.join(DATA_DIR, name)
+    return local_path
 
 
 if __name__ == "__main__":
@@ -107,8 +116,13 @@ if __name__ == "__main__":
         print(f"\nProcessing {ticker}...")
         filings = get_latest_filings(cik, count=10)
         for f in filings:
-            basename = f["filename"]
-            idx_path = download_filing_index(cik, f["accession"], basename)
-            choose_and_download(cik, f["accession"], idx_path)
+            basename = f['filename']
+            idx_path = download_filing_index(cik, f['accession'], basename)
+            component_path = choose_and_download(cik, f['accession'], idx_path)
+            print(f"Downloaded component to: {component_path}")
+            # If you want to classify it immediately:
+            # text = open(component_path, 'r').read(2000)
+            # label = classify_text(text)
+            # print("Classified as", label)
 
     print("Ingestion complete.")

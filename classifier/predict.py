@@ -29,8 +29,12 @@ def classify_text(text: str) -> str:
     """
     Return the classifier’s predicted label for the given text.
     """
-    inputs = tokenizer(text, return_tensors='pt', truncation=True)
+    inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
+    # DistilBERT doesn’t expect token_type_ids
+    inputs.pop('token_type_ids', None)
+
     with torch.no_grad():
         logits = model(**inputs).logits
+
     pred_id = logits.argmax(dim=-1).item()
     return model.config.id2label[pred_id]
