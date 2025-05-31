@@ -14,6 +14,7 @@ VECTOR_STORE = Path(__file__).parent / "faiss_index"
 METADATA_STORE = VECTOR_STORE.with_suffix(".meta.json")
 DOCS_DIR    = Path(__file__).parent.parent / "ingestion" / "data"
 OPENAI_KEY  = os.getenv("OPENAI_API_KEY")
+CHUNK_SIZE = 1000
 
 # Initialize models
 embedder = SentenceTransformer(EMBED_MODEL)
@@ -76,8 +77,8 @@ def retrieve_context(question: str, top_k: int = 5) -> List[str]:
         src = entry["source"]
         chunk_idx = entry["chunk_index"]
         full = (DOCS_DIR / src).read_text(encoding="utf-8", errors="ignore")
-        start = chunk_idx * chunk_size
-        end = start + chunk_size
+        start = chunk_idx * CHUNK_SIZE
+        end = start + CHUNK_SIZE
         snippet = full[start:end]
         contexts.append(
             f"Source: {src}, chunk {chunk_idx}, sentiment: {entry['sentiment']} ({entry['sentiment_score']:.2f})\n{snippet}"
