@@ -97,7 +97,7 @@ def summarize_text(text: str) -> str:
         Text:
         {text}
         """
-    resp = openai.ChatCompletion.create(
+    resp = openai.chat.completions.create(
         model="gpt-4",
         messages=[
             {"role": "system", "content": "You summarize financial documents."},
@@ -122,8 +122,8 @@ def answer_question(question: str) -> str:
 
         Question: {question}
         """
-    resp = openai.ChatCompletion.create(
-        model="gpt-4",
+    resp = openai.chat.completions.create(
+        model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "You answer financial queries based on provided context."},
             {"role": "user", "content": prompt}
