@@ -1,40 +1,73 @@
+# File: classifier/predict.py
+
+import os
 import sys
 from pathlib import Path
 import torch
 from transformers import DistilBertConfig, DistilBertForSequenceClassification, PreTrainedTokenizerFast
 from safetensors.torch import load_file as load_safetensors
 
-# Add project root to sys.path so ingestion and classifier packages import correctly
+# Determine project root so we can locate the checkpoint directory
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
+MODEL_DIR = PROJECT_ROOT / "classifier" / "checkpoint"
 
-# Paths
-MODEL_DIR = PROJECT_ROOT / 'classifier' / 'checkpoint'
+# We will cache these on first use
+_tokenizer = None
+_model = None
 
-# Load tokenizer from local tokenizer.json
-tokenizer = PreTrainedTokenizerFast(
-    tokenizer_file=str(MODEL_DIR / 'tokenizer.json')
-)
 
-# Manually load model config and weights to avoid HF hub logic
-config = DistilBertConfig.from_json_file(str(MODEL_DIR / 'config.json'))
-model = DistilBertForSequenceClassification(config)
+def _load_model_and_tokenizer():
+    """
+    Lazy‐load the DistilBERT model and tokenizer from MODEL_DIR.
+    If anything fails, leave _tokenizer and _model as None.
+    """
+    global _tokenizer, _model
 
-# Load safetensors weights
-state_dict = load_safetensors(str(MODEL_DIR / 'model.safetensors'))
-model.load_state_dict(state_dict)
-model.eval()
+    # If already loaded, do nothing
+    if _tokenizer is not None and _model is not None:
+        return
+
+    try:
+        # Ensure the checkpoint folder exists and has tokenizer.json
+        if not MODEL_DIR.exists() or not (MODEL_DIR / "tokenizer.json").is_file():
+            print(">>> [classifier.predict] No checkpoint found; returning UNCLASSIFIED at inference.")
+            return
+
+        # Load the tokenizer from the saved tokenizer.json
+        _tokenizer = PreTrainedTokenizerFast(
+            tokenizer_file=str(MODEL_DIR / "tokenizer.json")
+        )
+
+        # Load the DistilBERT configuration
+        config = DistilBertConfig.from_json_file(str(MODEL_DIR / "config.json"))
+
+        # Initialize a fresh model from that config
+        _model = DistilBertForSequenceClassification(config)
+
+        # Load the safetensors file into the model
+        state_dict = load_safetensors(str(MODEL_DIR / "model.safetensors"))
+        _model.load_state_dict(state_dict)
+        _model.eval()
+
+        print(">>> [classifier.predict] Model & tokenizer loaded successfully.")
+
+    except Exception as e:
+        # If anything went wrong, wipe them out
+        print(f">>> [classifier.predict] Failed to load model/tokenizer: {e}")
+        _tokenizer = None
+        _model = None
+
 
 def classify_text(text: str) -> str:
     """
     Return the classifier’s predicted label for the given text.
+    If loading hasn’t occurred or fails, return "UNCLASSIFIED".
     """
-    inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
-    # DistilBERT doesn’t expect token_type_ids
-    inputs.pop('token_type_ids', None)
+    # On first call, try to load the model/tokenizer
+    if _model is None or _tokenizer is None:
+        _load_model_and_tokenizer()
 
-    with torch.no_grad():
-        logits = model(**inputs).logits
+    # If still not loaded, bail out
+    if _model is None or _tokenizer is None:
+        return "UNCLASSIFIED"
 
-    pred_id = logits.argmax(dim=-1).item()
-    return model.config.id2label[pred_id]

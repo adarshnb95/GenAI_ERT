@@ -1,8 +1,13 @@
-fastapi
-uvicorn
-streamlit
-openai
+# Core libraries
+transformers[torch]>=4.0.0
+datasets>=2.0.0
+evaluate>=0.3.0
 sentence-transformers
 faiss-cpu
-transformers
-pytest
+openai
+safetensors
+streamlit
+fastapi
+uvicorn
+pandas
+scikit-learn
