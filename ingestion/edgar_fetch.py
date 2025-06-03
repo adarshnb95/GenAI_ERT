@@ -101,45 +101,61 @@ def classify_if_available(text: str) -> str:
 
 def choose_and_download(cik: str, accession: str, index_path: str) -> str:
     """
-    Parse the index JSON to find the primary XBRL or HTML filing,
-    download it, classify a snippet if possible, and return its local filepath.
+    Open the index JSON, pick the true XBRL instance (.xml) first
+    (the one not ending in _cal.xml, _def.xml, _lab.xml, _pre.xml, or FilingSummary.xml).
+    If none found, fall back to the first HTML. Return the local path.
     """
-    component_name = ""
     with open(index_path, "r", encoding="utf-8") as f:
-        index_data = json.load(f)
+        idx = json.load(f)
 
-    # First look for XBRL
-    for entry in index_data.get("directory", {}).get("item", []):
-        name = entry.get("name", "")
-        if name.lower().endswith(".xbrl"):
-            component_name = name
-            break
-    else:
-        # Fallback to HTML
-        for entry in index_data.get("directory", {}).get("item", []):
-            name = entry.get("name", "")
-            if name.lower().endswith((".htm", ".html")):
-                component_name = name
+    items = idx.get("directory", {}).get("item", [])
+
+    instance_name = None
+    for entry in items:
+        name = entry.get("name", "").lower()
+
+        # 1) Must end in ".xml"
+        if not name.endswith(".xml"):
+            continue
+
+        # 2) Exclude common taxonomy or summary files
+        if name.endswith("_cal.xml") or name.endswith("_def.xml") \
+           or name.endswith("_lab.xml") or name.endswith("_pre.xml") \
+           or name.endswith("_htm.xml") \
+           or name == "filingsummary.xml":
+            continue
+
+        # If we get here, this is likely the XBRL instance:
+        instance_name = entry.get("name")
+        break
+
+    # 3) If no valid instance found, pick HTML
+    html_name = None
+    if instance_name is None:
+        for entry in items:
+            name = entry.get("name", "").lower()
+            if name.endswith((".htm", ".html")):
+                html_name = entry.get("name")
                 break
 
-    if not component_name:
-        print(f"No XBRL/HTML component found for {accession}")
+    chosen = instance_name if instance_name else html_name
+    if chosen is None:
+        print(f"[WARN] No XBRL instance or HTML found for accession {accession}")
         return ""
 
-    local_path = download_filing_component(cik, accession, component_name)
+    download_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{chosen}"
+    local_path = DATA_DIR / chosen
 
-    # Read a snippet for classification (first 2000 chars)
-    snippet = ""
+    resp = requests.get(download_url, headers={"User-Agent": "GenAI_ERT"})
     try:
-        with open(local_path, "r", encoding="utf-8", errors="ignore") as f:
-            snippet = f.read(2000)
-    except Exception:
-        pass
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[ERROR] Failed to download {chosen}: {e}")
+        return ""
 
-    label = classify_if_available(snippet)
-    print(f"Component {component_name} classified as: {label}")
-
-    return local_path
+    local_path.write_bytes(resp.content)
+    print(f"Downloaded component: {chosen}")
+    return str(local_path)
 
 
 if __name__ == "__main__":
