@@ -101,8 +101,7 @@ GenAI_ERT/
    uvicorn api.main:app --reload
    ```
 
-Visit `http://127.0.0.1:8000/docs` for interactive API docs. (Currently unavailable)
-
+Visit `http://127.0.0.1:8000/docs` for interactive API docs. 
 ---
 
 ## 📈 Usage Examples
@@ -128,6 +127,13 @@ Visit `http://127.0.0.1:8000/docs` for interactive API docs. (Currently unavaila
 ## Tips
 
 1. I noticed that the SEC files had already classified the files as 10-K and 10-Q, so I created a generate_labels.py that helped me generate test data using the official classification.
+2. I created an extract_metrics.py file that helps in collecting the files required according to the question asked.
+
+---
+
+## Current status
+
+Currently working on improving questioning and getting precise results.
 
 ---
 
