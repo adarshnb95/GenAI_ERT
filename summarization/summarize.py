@@ -7,6 +7,7 @@ import faiss
 from sentence_transformers import SentenceTransformer
 import openai
 from sentiment.finbert import sentiment_score
+from dotenv import load_dotenv
 
 # Paths & globals
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -18,10 +19,14 @@ CHUNK_SIZE = 1000
 
 # Initialize models
 embedder = SentenceTransformer(EMBED_MODEL)
+load_dotenv() 
 openai.api_key = OPENAI_KEY
 
+ # Load environment variables from .env file
 
-def build_faiss_index(reset: bool = False, chunk_size: int = 1000):
+
+
+def build_faiss_index(reset: bool = False):
     """
     Read all filings, split into chunks, compute sentiment, embed, and build the FAISS index.
     """
@@ -36,14 +41,14 @@ def build_faiss_index(reset: bool = False, chunk_size: int = 1000):
             content = file.read_text(encoding="utf-8", errors="ignore").strip()
             if not content:
                 continue
-            for i in range(0, len(content), chunk_size):
-                chunk = content[i:i+chunk_size]
+            for i in range(0, len(content), CHUNK_SIZE):
+                chunk = content[i:i+CHUNK_SIZE]
                 texts.append(chunk)
                 # Compute sentiment for each chunk
                 sent = sentiment_score(chunk)
                 metadata.append({
                     "source": file.name,
-                    "chunk_index": i // chunk_size,
+                    "chunk_index": i // CHUNK_SIZE,
                     "sentiment": sent.get("label"),
                     "sentiment_score": sent.get("score")
                 })
