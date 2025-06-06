@@ -8,56 +8,49 @@ from pathlib import Path
 DOCS_DIR = Path(__file__).parent.parent / "ingestion" / "data"
 FILENAME_PATTERN = re.compile(r"^aapl-(\d{8})\.xml$", re.IGNORECASE)
 
-def _collect_xbrl_by_year() -> dict[str, Path]:
+def _collect_xbrl_instances_by_ticker(ticker: str) -> dict[str, Path]:
     """
-    Scan ingestion/data for all 'aapl-YYYYMMDD.xml' files.
-    Return a dict mapping 'YYYY' -> Path to the latest Q4 (year-end) file for that year.
-    For example:
-       '2022' -> Path(".../aapl-20220930.xml")
-       '2023' -> Path(".../aapl-20230930.xml")
-       etc.
+    Return a dict of { 'YYYY' : Path to the Q4 instance XBRL for that year } for any given ticker.
+    Looks for files named like 'TICKER-YYYYMMDD.xml' under ingestion/data.
     """
-    files_by_date = []  # list of (YYYYMMDD, Path)
-    for file in DOCS_DIR.glob("*.xml"):
+    ticker = ticker.lower()
+    candidates = []  # list of (YYYYMMDD, Path)
+    for file in DOCS_DIR.glob(f"{ticker}-*.xml"):
         m = FILENAME_PATTERN.match(file.name)
-        if not m:
-            continue
-        date_str = m.group(1)  # e.g. "20220930"
-        files_by_date.append((date_str, file))
+        if m and m.group(1).lower() == ticker:
+            date_str = m.group(2)  # e.g. '20200926'
+            candidates.append((date_str, file))
 
-    # Sort descending by date_str (newest first)
-    files_by_date.sort(key=lambda x: x[0], reverse=True)
+    candidates.sort(key=lambda x: x[0], reverse=True)
 
-    # For each file, if its date ends with "0930" (i.e. Q4), map its year->Path
-    # If you want to include trailing-quarter numbers, you can adjust logic.
     revenue_by_year: dict[str, Path] = {}
-    for date_str, path in files_by_date:
-        year = date_str[:4]                # "2022", "2023", ...
-        month_day = date_str[4:]           # e.g. "0930"
-        if month_day == "0930" and year not in revenue_by_year:
-            # Found the year-end (Q4) file for this year
+    for date_str, path in candidates:
+        year = date_str[:4]
+        month_day = date_str[4:]
+        # We treat Q4 (month_day == '0930' or '0926' etc.) as year-end:
+        # EDGAR often uses e.g. 20200926 for fiscal year ending Sep 26, 2020
+        if month_day.startswith("09") and year not in revenue_by_year:
             revenue_by_year[year] = path
 
     return revenue_by_year
 
-def get_revenue_by_year(year: str) -> str:
+def get_revenue_by_year(ticker: str, year: str) -> str:
     """
-    Return the <Revenues> (or <SalesRevenueNet>) tag value for Apple in the given calendar year.
-    If no Q4 XBRL exists for that year, returns an empty string.
+    Reads <Revenues> or <SalesRevenueNet> from the Q4 XBRL for 'ticker' in 'year'.
+    Returns the numeric text, e.g. '274515000000', or '' if not found.
     """
-    revenue_map = _collect_xbrl_by_year()
+    revenue_map = _collect_xbrl_instances_by_ticker(ticker)
     xbrl_file = revenue_map.get(year)
     if not xbrl_file:
         return ""
 
-    # Parse the chosen XBRL instance
     tree = ET.parse(str(xbrl_file))
     root = tree.getroot()
 
     for elem in root.findall(".//*"):
         tag = elem.tag
         if "}" in tag:
-            tag = tag.split("}", 1)[1]  # strip namespace
+            tag = tag.split("}", 1)[1]
         if tag in ("Revenues", "SalesRevenueNet"):
             return elem.text or ""
     return ""
@@ -121,3 +114,58 @@ def get_latest_revenue() -> str:
 
     return values[0] if values else ""
 
+def get_net_income_by_year(ticker: str, year: str) -> str:
+    """
+    Return <NetIncomeLoss> for the given ticker and calendar year’s Q4 XBRL.
+    Very similar to get_revenue_by_year but looks for NetIncomeLoss.
+    """
+    mapping = _collect_xbrl_instances_by_ticker(ticker)
+    file_path = mapping.get(year)
+    if not file_path:
+        return ""
+
+    tree = ET.parse(str(file_path))
+    root = tree.getroot()
+    for elem in root.findall(".//*"):
+        tag = elem.tag
+        if "}" in tag:
+            tag = tag.split("}", 1)[1]
+        if tag == "NetIncomeLoss":
+            return elem.text or ""
+    return ""
+
+def get_net_income_by_years(ticker1: str, ticker2: str) -> dict[str, tuple]:
+    """
+    Return a dict { year: (ni1, ni2) } for each year where both tickers have Q4 XBRL.
+    """
+    m1 = _collect_xbrl_instances_by_ticker(ticker1)
+    m2 = _collect_xbrl_instances_by_ticker(ticker2)
+    common_years = set(m1.keys()) & set(m2.keys())
+    result = {}
+    for year in common_years:
+        ni1 = get_net_income_by_year(ticker1, year)
+        ni2 = get_net_income_by_year(ticker2, year)
+        if ni1 and ni2:
+            result[year] = (ni1, ni2)
+    return result
+
+def get_profit_percentage_by_years(ticker1: str, ticker2: str) -> dict[str, tuple]:
+    """
+    Return { year: (pct1, pct2) } where:
+      pct = round(100 * net_income / revenue, 2)
+    Skip if revenue or net income is missing or zero.
+    """
+    years_data = get_net_income_by_years(ticker1, ticker2).keys()
+    result = {}
+    for year in years_data:
+        ni1 = get_net_income_by_year(ticker1, year)
+        rev1 = get_revenue_by_year(ticker1, year)
+        ni2 = get_net_income_by_year(ticker2, year)
+        rev2 = get_revenue_by_year(ticker2, year)
+        try:
+            pct1 = round(100 * float(ni1) / float(rev1), 2)
+            pct2 = round(100 * float(ni2) / float(rev2), 2)
+            result[year] = (pct1, pct2)
+        except:
+            continue
+    return result

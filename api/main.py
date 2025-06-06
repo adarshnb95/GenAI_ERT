@@ -3,16 +3,12 @@ from pydantic import BaseModel
 from typing import List
 import uvicorn
 import re
-from summarization.summarize import build_faiss_index, summarize_text, answer_question
-from summarization.extract_metrics import (
-    get_latest_net_income,
-    get_latest_revenue,
-    get_revenue_by_year
-)
+from summarization.summarize import build_faiss_index, summarize_text
 # Ingestion functions
 from ingestion.edgar_fetch import get_latest_filings, download_filing_index, choose_and_download
 # Classification utility
 from classifier.predict import classify_text
+from api.ask_handlers import ASK_HANDLERS
 
 # Summarization placeholder (to be implemented)
 # from summarization.summarize import summarize_text
@@ -29,6 +25,8 @@ class IngestRequest(BaseModel):
 
 class ClassifyRequest(BaseModel):
     text: str
+
+TICKER_YEAR_PATTERN = re.compile(r"\b([A-Za-z]{2,5})\D+?(20\d{2})\b")
 
 @app.on_event("startup")
 async def startup_event():
@@ -75,51 +73,31 @@ async def summarize(request: ClassifyRequest):
 
 YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 
+
 @app.post("/ask")
 async def ask(request: ClassifyRequest):
-    q_raw = request.text.strip()
-    q = q_raw.lower()
-    print(f"[DEBUG] Received /ask: '{q_raw}'")
+    """
+    Route the incoming question to the first handler whose `can_handle`
+    returns True. If it throws an exception, propagate it as HTTP 500.
+    """
+    q = request.text.strip()
+    print(f"[DEBUG] /ask received: '{q}'")
 
-    # 1) Net Income logic (unchanged)
-    if "net income" in q:
-        net_val = get_latest_net_income()
-        print(f"[DEBUG] get_latest_net_income() returned: '{net_val}'")
-        if net_val:
-            return {"answer": f"${net_val}"}
+    for handler in ASK_HANDLERS:
+        try:
+            if handler.can_handle(q):
+                return handler.handle(q)
+        except HTTPException:
+            # If a handler explicitly raises HTTPException, bubble it up
+            raise
+        except Exception as e:
+            # Any other exception—wrap in HTTPException
+            raise HTTPException(status_code=500, detail=str(e))
 
-    # 2) Revenue comparisons by year
-    #    If the question mentions two or more years, extract them and compare
-    years = YEAR_PATTERN.findall(q)  # e.g. ["2022", "2023"]
-    if "revenue" in q or "sales" in q:
-        if years:
-            # If user asked “What was revenue in 2022? Compared with 2023?”
-            # We handle up to two years here
-            responses = []
-            for yr in years[:2]:  # take the first two years mentioned
-                rev = get_revenue_by_year(yr)
-                if rev:
-                    responses.append(f"{yr}: ${rev}")
-                else:
-                    responses.append(f"{yr}: Not found")
-            # If exactly two years, compare
-            if len(responses) == 2:
-                return {"answer": f"{responses[0]} vs {responses[1]}"}
-            # Otherwise return whatever we found
-            return {"answer": "; ".join(responses)}
+    # In theory, RAGFallbackHandler always handles last,
+    # so we should never reach here.
+    raise HTTPException(status_code=500, detail="Unable to handle the question.")
 
-        # If no specific year was mentioned, fall back to “latest only”
-        rev_val = get_latest_revenue()
-        print(f"[DEBUG] get_latest_revenue() returned: '{rev_val}'")
-        if rev_val:
-            return {"answer": f"${rev_val}"}
-
-    # 3) Fallback to RAG
-    try:
-        answer = answer_question(q_raw)
-        return {"answer": answer}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

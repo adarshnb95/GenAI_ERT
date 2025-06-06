@@ -13,7 +13,7 @@ st.title("📰 Generative AI Equity Research Tool")
 st.sidebar.header("Settings")
 
 ticker = st.sidebar.text_input("Ticker (e.g. AAPL)", value="AAPL")
-num = st.sidebar.slider("Number of Filings to Ingest", min_value=1, max_value=5, value=2)
+num = st.sidebar.slider("Number of Filings to Ingest", min_value=1, max_value=100, value=2)
 
 # Ingest & classify
 if st.sidebar.button("Ingest & Classify"):
