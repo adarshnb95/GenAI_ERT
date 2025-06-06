@@ -20,6 +20,7 @@ Thumbs.db
 
 # Data and logs
 ingestion/data/
+ingestion/news_data
 *.log
 
 # Secrets & config
