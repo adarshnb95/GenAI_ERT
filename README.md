@@ -20,8 +20,9 @@ A full-stack Python application for automated EDGAR filings ingestion, FAISS-bas
 6. [5-Day Development Plan](#5-day-development-plan)
 7. [Adding New Question Types](#adding-new-question-types)
 8. [Testing](#testing)
-9. [Contributing](#contributing)
-10. [License](#license)
+9. [Notes](#notes)
+10. [Contributing](#contributing)
+11. [License](#license)
 
 ---
 
@@ -134,8 +135,9 @@ GenAI_ERT/
 
   (Requires `python-dotenv`.)
 
-=======
+
 Visit `http://127.0.0.1:8000/docs` for interactive API docs. 
+
 ---
 
 ## Usage
@@ -161,15 +163,15 @@ python start_app.py
 
 * **Ingest & index a single ticker**:
 
-  ```bash
-  python - <<'EOF'
-  ```
+```bash
+   python - <<'EOF'
+   from ingestion.edgar\_fetch import fetch\_for\_ticker
+   from summarization.summarize import build\_faiss\_index\_for\_ticker
+   fetch\_for\_ticker("AAPL")
+   build\_faiss\_index\_for\_ticker("AAPL", reset=True)
+   EOF
 
-from ingestion.edgar\_fetch import fetch\_for\_ticker
-from summarization.summarize import build\_faiss\_index\_for\_ticker
-fetch\_for\_ticker("AAPL")
-build\_faiss\_index\_for\_ticker("AAPL", reset=True)
-EOF
+```
 
 ````
 - **Build news index**:
@@ -197,12 +199,12 @@ EOF
 
 ## 5-Day Development Plan
 
-**Day 1: Automate Ingestion & Indexing**
+**Day 1: Automate Ingestion & Indexing** (Completed)
 
 * Finalize `run_pipeline.py`, test end-to-end
 * Commit automation script and verify folder outputs
 
-**Day 2: Parameterize by Ticker**
+**Day 2: Parameterize by Ticker** (Completed)
 
 * Refactor `ingestion/edgar_fetch.py`, `summarization/summarize.py` to accept ticker
 * Verify `fetch_for_ticker("AAPL")` writes to `ingestion/data/AAPL/`
@@ -247,7 +249,10 @@ Run unit tests and end-to-end smoke tests:
 ```bash
 pytest -q tests/
 ```
-=======
+---
+
+## Notes
+
 1. I noticed that the SEC files had already classified the files as 10-K and 10-Q, so I created a generate_labels.py that helped me generate test data using the official classification.
 2. I created an extract_metrics.py file that helps in collecting the files required according to the question asked.
 
