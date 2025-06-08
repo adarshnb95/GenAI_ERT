@@ -10,16 +10,19 @@ HEADERS = {
 }
 
 # Map tickers to CIKs (10-digit strings)
-TICKER_CIK = {
+CIK_MAP = {
     "AAPL": "0000320193",
     "MSFT": "0000789019",
-    # Add more tickers/CIKs as needed
+    "CRM":  "0000774607",
+    # add more tickers here…
 }
 
 # Directory for raw filings
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
+INGESTION_ROOT = Path(__file__).parent.resolve()
+DATA_ROOT      = INGESTION_ROOT / "data"
 
 def fetch_submission_index(cik: str) -> dict:
     """
@@ -99,79 +102,125 @@ def classify_if_available(text: str) -> str:
         return "UNCLASSIFIED"
 
 
-def choose_and_download(cik: str, accession: str, index_path: str) -> str:
+def choose_and_download(
+    cik: str,
+    accession: str,
+    index_path: str,
+    dest_dir: Path
+) -> Path:
     """
-    Open the index JSON, pick the true XBRL instance (.xml) first
-    (the one not ending in _cal.xml, _def.xml, _lab.xml, _pre.xml, or FilingSummary.xml).
-    If none found, fall back to the first HTML. Return the local path.
+    Given a SEC filing index JSON at `index_path`, pick the primary XBRL instance
+    (or fallback to HTML), download it from EDGAR, save under `dest_dir/`, and
+    return the Path to the saved file.
     """
+    # ensure destination folder exists
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    # load the index JSON
     with open(index_path, "r", encoding="utf-8") as f:
         idx = json.load(f)
 
     items = idx.get("directory", {}).get("item", [])
 
+    # 1) Try to find the true XBRL instance
     instance_name = None
     for entry in items:
-        name = entry.get("name", "").lower()
-
-        # 1) Must end in ".xml"
-        if not name.endswith(".xml"):
+        name = entry.get("name", "")
+        lower = name.lower()
+        if not lower.endswith(".xml"):
             continue
-
-        # 2) Exclude common taxonomy or summary files
-        if name.endswith("_cal.xml") or name.endswith("_def.xml") \
-           or name.endswith("_lab.xml") or name.endswith("_pre.xml") \
-           or name.endswith("_htm.xml") \
-           or name == "filingsummary.xml":
+        # exclude taxonomy/support files
+        if any(lower.endswith(suffix) for suffix in (
+            "_cal.xml", "_def.xml", "_lab.xml", "_pre.xml", "_htm.xml"
+        )) or lower == "filingsummary.xml":
             continue
-
-        # If we get here, this is likely the XBRL instance:
-        instance_name = entry.get("name")
+        instance_name = name
         break
 
-    # 3) If no valid instance found, pick HTML
-    html_name = None
-    if instance_name is None:
+    # 2) If no XBRL found, fallback to the first HTML
+    chosen = instance_name
+    if chosen is None:
         for entry in items:
-            name = entry.get("name", "").lower()
-            if name.endswith((".htm", ".html")):
-                html_name = entry.get("name")
+            name = entry.get("name", "")
+            if name.lower().endswith((".htm", ".html")):
+                chosen = name
                 break
 
-    chosen = instance_name if instance_name else html_name
-    if chosen is None:
-        print(f"[WARN] No XBRL instance or HTML found for accession {accession}")
-        return ""
+    if not chosen:
+        print(f"[WARN] No XBRL or HTML found for CIK={cik}, accession={accession}")
+        return None
 
-    download_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{chosen}"
-    local_path = DATA_DIR / chosen
-
-    resp = requests.get(download_url, headers={"User-Agent": "GenAI_ERT"})
+    # 3) Download the chosen file
+    url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/{chosen}"
+    headers = {"User-Agent": "GenAI_ERT adisi@example.com"}  # replace with your info
+    resp = requests.get(url, headers=headers)
     try:
         resp.raise_for_status()
     except Exception as e:
-        print(f"[ERROR] Failed to download {chosen}: {e}")
-        return ""
+        print(f"[ERROR] Download failed for {chosen}: {e}")
+        return None
 
-    local_path.write_bytes(resp.content)
-    print(f"Downloaded component: {chosen}")
-    return str(local_path)
+    # 4) Write to dest_dir
+    out_path = dest_dir / chosen
+    out_path.write_bytes(resp.content)
+    print(f"[edgar_fetch] Downloaded component: {chosen} → {out_path.name}")
 
+    return out_path
+
+def fetch_for_ticker(ticker: str, count: int = 20) -> list[Path]:
+    ticker = ticker.upper()
+    if ticker not in CIK_MAP:
+        raise ValueError(f"Unknown ticker {ticker}. Add it to CIK_MAP.")
+    cik = CIK_MAP[ticker]
+    out_dir = DATA_ROOT / ticker
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1) Get the small metadata listing of filings
+    filings = get_latest_filings(cik, count=count)
+
+    saved_paths: list[Path] = []
+    for f in filings:
+        accession = f["accession"]
+        base = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}"
+
+        # 2) Download the EDGAR index.json (which has the 'directory' listing)
+        idx_url  = f"{base}/index.json"
+        resp = requests.get(idx_url, headers=HEADERS)
+        resp.raise_for_status()
+        idx_json = resp.json()
+
+        # 3) Save that full index.json to disk
+        idx_path = out_dir / f"{ticker}-{accession}-index.json"
+        idx_path.write_text(json.dumps(idx_json, indent=2), encoding="utf-8")
+        saved_paths.append(idx_path)
+
+        # 4) Now that we have a real index.json, pick & download the XBRL/HTML
+        choose_and_download(cik, accession, str(idx_path), dest_dir=out_dir)
+
+    print(f"[edgar_fetch] Fetched {len(saved_paths)} filings for {ticker} into {out_dir}")
+    return saved_paths
 
 if __name__ == "__main__":
     # Example: fetch & download the last 2 filings for AAPL
-    ticker = "AAPL"
-    cik = TICKER_CIK.get(ticker.upper())
-    if not cik:
-        print(f"Ticker {ticker} not found in TICKER_CIK mapping.")
-        exit(1)
+    import argparse
 
-    print(f"Processing {ticker}...")
-    filings = get_latest_filings(cik, count=60)
-    for f in filings:
-        basename = f["filename"]
-        idx_path = download_filing_index(cik, f["accession"], basename)
-        component_path = choose_and_download(cik, f["accession"], idx_path)
-        if component_path:
-            print(f"Downloaded component to: {component_path}\n")
-    print("Ingestion complete.")
+    parser = argparse.ArgumentParser(
+        description="Fetch recent EDGAR filings (10-K / 10-Q) for a given ticker"
+    )
+    parser.add_argument(
+        "ticker",
+        help="Stock ticker symbol, e.g. AAPL, MSFT, CRM"
+    )
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=20,
+        help="Maximum number of filings to fetch (default: 20)"
+    )
+    args = parser.parse_args()
+
+    try:
+        paths = fetch_for_ticker(args.ticker, count=args.count)
+        print(f"✅ Saved {len(paths)} index files under ingestion/data/{args.ticker.upper()}/")
+    except Exception as e:
+        print(f"❌ Error fetching filings for {args.ticker.upper()}: {e}")

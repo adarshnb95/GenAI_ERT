@@ -13,3 +13,4 @@ pandas
 scikit-learn
 python-dotenv
 newsapi-python
+fire
