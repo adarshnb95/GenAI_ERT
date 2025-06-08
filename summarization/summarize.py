@@ -24,46 +24,110 @@ openai.api_key = OPENAI_KEY
 
  # Load environment variables from .env file
 
+_embedder = None
+def _get_embedder():
+    global _embedder
+    if _embedder is None:
+        from sentence_transformers import SentenceTransformer
+        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    return _embedder
 
+def build_faiss_index_for_ticker(
+    ticker: str,
+    reset: bool = False,
+    chunk_size: int = 1000
+):
+    ticker = ticker.upper()
 
-def build_faiss_index(reset: bool = False):
-    """
-    Read all filings, split into chunks, compute sentiment, embed, and build the FAISS index.
-    """
-    VECTOR_STORE.parent.mkdir(exist_ok=True)
-    if reset and VECTOR_STORE.exists():
-        VECTOR_STORE.unlink()
-    texts = []
-    metadata = []
-    exts = ['.xbrl', '.html', '.htm']
-    for file in DOCS_DIR.iterdir():
-        if file.suffix.lower() in exts:
-            content = file.read_text(encoding="utf-8", errors="ignore").strip()
-            if not content:
-                continue
-            for i in range(0, len(content), CHUNK_SIZE):
-                chunk = content[i:i+CHUNK_SIZE]
-                texts.append(chunk)
-                # Compute sentiment for each chunk
-                sent = sentiment_score(chunk)
-                metadata.append({
-                    "source": file.name,
-                    "chunk_index": i // CHUNK_SIZE,
-                    "sentiment": sent.get("label"),
-                    "sentiment_score": sent.get("score")
-                })
+    # 1) Source docs folder
+    docs_dir = Path(__file__).parent.parent / "ingestion" / "data" / ticker
+    if not docs_dir.exists():
+        raise FileNotFoundError(f"No docs for {ticker}. Run fetch_for_ticker first.")
+
+    # 2) Base path for all indexes
+    base_index_dir = Path(__file__).parent / "faiss_index"
+    # If someone accidentally committed a file named 'faiss_index', remove it
+    if base_index_dir.exists() and not base_index_dir.is_dir():
+        base_index_dir.unlink()
+
+    # 3) Per-ticker output directory
+    out_dir = base_index_dir / ticker
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    idx_path  = out_dir / f"{ticker}.index"
+    meta_path = out_dir / f"{ticker}.meta.json"
+    if reset and idx_path.exists():
+        idx_path.unlink()
+
+    texts, metadata = [], []
+    for file in docs_dir.iterdir():
+        if file.suffix.lower() not in (".html", ".htm", ".xml", ".xbrl"):
+            continue
+        content = file.read_text(encoding="utf-8", errors="ignore").strip()
+        for i in range(0, len(content), chunk_size):
+            chunk = content[i : i + chunk_size]
+            texts.append(chunk)
+            metadata.append({
+                "source": file.name,
+                "chunk_index": i // chunk_size
+            })
+
     if not texts:
-        print("No documents found to index.")
+        print(f"[summarize] No chunks for {ticker}.")
         return
+
+    # 3) embed
+    embedder = _get_embedder()
     vectors = embedder.encode(texts, show_progress_bar=True, convert_to_numpy=True)
+
+    # 4) build FAISS
+    import faiss
     dim = vectors.shape[1]
     index = faiss.IndexFlatL2(dim)
     index.add(vectors)
-    faiss.write_index(index, str(VECTOR_STORE))
-    with open(METADATA_STORE, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2)
-    print(f"Built FAISS index with {len(texts)} chunks and sentiment data.")
+    faiss.write_index(index, str(idx_path))
 
+    # 5) write metadata
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+
+    print(f"[summarize] Built FAISS index for {ticker}: {len(texts)} chunks.")
+
+def retrieve_context_for_ticker(
+    ticker: str,
+    question: str,
+    top_k: int = 5,
+    chunk_size: int = 1000
+):
+    import json, faiss
+    from pathlib import Path
+
+    ticker = ticker.upper()
+    docs_dir = Path(__file__).parent.parent / "ingestion" / "data" / ticker
+    vec_dir  = Path(__file__).parent / "faiss_index" / ticker
+    idx_path = vec_dir / f"{ticker}.index"
+    meta_path= vec_dir / f"{ticker}.meta.json"
+    if not idx_path.exists() or not meta_path.exists():
+        raise RuntimeError(f"Index for {ticker} not found – run build_faiss_index_for_ticker().")
+
+    # load
+    index = faiss.read_index(str(idx_path))
+    metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    # embed query
+    q_vec = _get_embedder().encode([question], convert_to_numpy=True)
+    D, I = index.search(q_vec, top_k)
+
+    snippets = []
+    for hit in I[0]:
+        m = metadata[hit]
+        src_file = docs_dir / m["source"]
+        full = src_file.read_text(encoding="utf-8", errors="ignore")
+        start = m["chunk_index"] * chunk_size
+        snippet = full[start : start + chunk_size]
+        snippets.append(f"Source: {m['source']} (chunk {m['chunk_index']})\n{snippet}")
+
+    return snippets
 
 def retrieve_context(question: str, top_k: int = 5) -> List[str]:
     """

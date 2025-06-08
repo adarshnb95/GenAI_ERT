@@ -6,11 +6,11 @@ MODEL_NAME = "yiyanghkust/finbert-tone"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 model     = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
 
-sentiment_pipe = pipeline(
+sentiment = pipeline(
     "sentiment-analysis",
-    model=model,
-    tokenizer=tokenizer,
-    return_all_scores=False    # returns the single best label
+    model="yiyanghkust/finbert-tone",
+    tokenizer="yiyanghkust/finbert-tone",
+    top_k=1
 )
 
 def sentiment_score(text: str) -> dict:
@@ -18,5 +18,5 @@ def sentiment_score(text: str) -> dict:
     Returns a dict with 'label' (Positive/Negative/Neutral)
     and 'score' (confidence) for the given text.
     """
-    result = sentiment_pipe(text[:512])[0]   # limit to 512 tokens
+    result = sentiment(text[:512])[0]   # limit to 512 tokens
     return {"label": result["label"], "score": result["score"]}
