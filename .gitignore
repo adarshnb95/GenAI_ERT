@@ -57,3 +57,6 @@ htmlcov/
 # These are typically large files and should not be versioned
 classifier/checkpoint/
 classifier/checkpoint-*/
+
+# Summarized faiss index
+summarization/faiss_index/
