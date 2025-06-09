@@ -3,12 +3,13 @@ from pydantic import BaseModel
 from typing import List
 import uvicorn
 import re
-from summarization.summarize import build_faiss_index, summarize_text
+from summarization.summarize import build_faiss_index_for_ticker, summarize_text, retrieve_context_for_ticker
 # Ingestion functions
-from ingestion.edgar_fetch import get_latest_filings, download_filing_index, choose_and_download
+from ingestion.edgar_fetch import get_latest_filings, download_filing_index, choose_and_download, fetch_for_ticker
 # Classification utility
 from classifier.predict import classify_text
 from api.ask_handlers import ASK_HANDLERS
+from api.utils import extract_tickers_via_gpt
 
 # Summarization placeholder (to be implemented)
 # from summarization.summarize import summarize_text
@@ -26,12 +27,10 @@ class IngestRequest(BaseModel):
 class ClassifyRequest(BaseModel):
     text: str
 
-TICKER_YEAR_PATTERN = re.compile(r"\b([A-Za-z]{2,5})\D+?(20\d{2})\b")
+class AskRequest(BaseModel):
+    text: str
 
-@app.on_event("startup")
-async def startup_event():
-    # Build (or reload) the FAISS index before serving any requests
-    build_faiss_index(reset=False)
+TICKER_YEAR_PATTERN = re.compile(r"\b([A-Za-z]{2,5})\D+?(20\d{2})\b")
 
 @app.post("/ingest")
 async def ingest(request: IngestRequest):
@@ -75,30 +74,26 @@ YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 
 
 @app.post("/ask")
-async def ask(request: ClassifyRequest):
-    """
-    Route the incoming question to the first handler whose `can_handle`
-    returns True. If it throws an exception, propagate it as HTTP 500.
-    """
-    q = request.text.strip()
-    print(f"[DEBUG] /ask received: '{q}'")
+async def ask(req: AskRequest):
+    question = req.text.strip()
 
+    # 1) Use GPT to pull company names → tickers
+    tickers = extract_tickers_via_gpt(question)
+    if not tickers:
+        raise HTTPException(400, "Couldn't identify any known companies in your question.")
+
+    # 2) Ensure data/index exist for each ticker
+    for ticker in tickers:
+        fetch_for_ticker(ticker)
+        build_faiss_index_for_ticker(ticker, reset=False)
+
+    # 3) Dispatch to handlers (each now accepts List[str], text)
     for handler in ASK_HANDLERS:
-        try:
-            if handler.can_handle(q):
-                return handler.handle(q)
-        except HTTPException:
-            # If a handler explicitly raises HTTPException, bubble it up
-            raise
-        except Exception as e:
-            # Any other exception—wrap in HTTPException
-            raise HTTPException(status_code=500, detail=str(e))
+        if handler.can_handle(question):
+            return handler.handle(tickers, question)
 
-    # In theory, RAGFallbackHandler always handles last,
-    # so we should never reach here.
-    raise HTTPException(status_code=500, detail="Unable to handle the question.")
-
+    raise HTTPException(500, "No handler could process the question.")
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("api.main:app", host="127.0.0.1", port=8000, reload=True)

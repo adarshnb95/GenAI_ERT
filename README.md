@@ -173,26 +173,27 @@ python start_app.py
 
 ```
 
-````
-- **Build news index**:
+* **Build news index**:
+
 ```bash
-python - <<'EOF'
-from ingestion.news_fetch import fetch_and_store_news
-from summarization.news_index import build_news_index
-fetch_and_store_news("AAPL")
-build_news_index(reset=True)
-EOF
-````
+   python - <<'EOF'
+   from ingestion.news_fetch import fetch_and_store_news
+   from summarization.news_index import build_news_index
+   fetch_and_store_news("AAPL")
+   build_news_index(reset=True)
+   EOF
+```
 
 * **Run backend only**:
 
   ```bash
-  uvicorn "api.main:create_app" --reload --reload-dir api --reload-dir summarization
+   uvicorn "api.main:create_app" --reload --reload-dir api --reload-dir summarization
   ```
+
 * **Run frontend only**:
 
   ```bash
-  streamlit run dashboard_app.py
+   streamlit run dashboard_app.py
   ```
 
 ---

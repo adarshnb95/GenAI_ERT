@@ -12,7 +12,30 @@ st.title("📰 Generative AI Equity Research Tool")
 # Sidebar inputs
 st.sidebar.header("Settings")
 
-ticker = st.sidebar.text_input("Ticker (e.g. AAPL)", value="AAPL")
+ticker = st.text_input(
+    "Enter stock ticker (e.g. AAPL, MSFT):",
+    value="AAPL",
+    max_chars=5
+).upper().strip()
+
+
+question = st.text_area("Enter your question about the filings:")
+
+if st.button("Get Answer", key="ask_button"):
+    if not ticker or not question:
+        st.error("Both ticker and question are required.")
+    else:
+        payload = {"ticker": ticker, "text": question}
+        try:
+            resp = requests.post("http://127.0.0.1:8000/ask", json=payload, timeout=30)
+            if resp.status_code == 200:
+                st.subheader("Answer")
+                st.write(resp.json().get("answer", "No answer returned."))
+            else:
+                st.error(f"Error {resp.status_code}: {resp.text}")
+        except requests.RequestException as e:
+            st.error(f"Request failed: {e}")
+
 num = st.sidebar.slider("Number of Filings to Ingest", min_value=1, max_value=100, value=2)
 
 # Ingest & classify
@@ -31,7 +54,7 @@ if st.sidebar.button("Ingest & Classify"):
 # Summarization UI
 st.header("Summarize Text")
 input_text = st.text_area("Paste filing text or summary input here:", height=200)
-if st.button("Generate Summary"):
+if st.button("Generate Summary", key="summary_button"):
     if input_text.strip():
         with st.spinner("Summarizing..."):
             resp = requests.post(f"{API_URL}/summarize", json={"text": input_text})
@@ -47,7 +70,7 @@ if st.button("Generate Summary"):
 # Q&A UI
 st.header("Ask a Question")
 question = st.text_input("Enter your question about the filings:")
-if st.button("Get Answer"):
+if st.button("Get Answer", key="qa_button"):
     if question.strip():
         with st.spinner("Retrieving answer..."):
             resp = requests.post(f"{API_URL}/ask", json={"text": question})
