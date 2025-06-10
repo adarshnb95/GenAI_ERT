@@ -211,7 +211,7 @@ python start_app.py
 * Verify `fetch_for_ticker("AAPL")` writes to `ingestion/data/AAPL/`
 * Verify `build_faiss_index_for_ticker("AAPL", reset=True)` creates FAISS index
 
-**Day 3: Unified Startup & UI Ticker Input**
+**Day 3: Unified Startup & UI Ticker Input** (Completed)
 
 * Create `start_app.py` to launch both services
 * Update Streamlit (`dashboard_app.py`) to include ticker input
