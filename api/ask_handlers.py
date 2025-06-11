@@ -2,6 +2,7 @@ import re
 from typing import List
 from fastapi import HTTPException
 import openai
+from ingestion.edgar_fetch import fetch_for_ticker
 
 from summarization.extract_metrics import (
     get_latest_revenue,
@@ -12,7 +13,7 @@ from summarization.extract_metrics import (
     get_profit_percentage_by_years,
 )
 from summarization.news_index import retrieve_news_context
-from summarization.summarize import answer_question
+from summarization.summarize import answer_question, build_faiss_index_for_ticker, retrieve_context_for_ticker
 
 
 class AskHandler:
@@ -168,6 +169,56 @@ class StockNewsHandler(AskHandler):
             answers.append(f"{t} analysis:\n" + resp.choices[0].message.content.strip())
         return {"answer": "\n\n".join(answers)}
 
+class FormN2Handler(AskHandler):
+    """
+    Triggered when the question mentions Form N-2.
+    Fetches the N-2 filing, retrieves its text chunks, then asks GPT to extract:
+      • Fund Structure
+      • Fund Subtype
+      • NAV Reporting Frequency
+      • Suitability
+    """
+    PATTERN = re.compile(r"\bform\s*n-2\b", re.IGNORECASE)
+
+    def can_handle(self, text: str) -> bool:
+        return bool(self.PATTERN.search(text))
+
+    def handle(self, tickers: List[str], text: str) -> dict:
+        answers = []
+        for t in tickers:
+            # 1) ingest only N-2
+            fetch_for_ticker(t, count=1, form_types=("N-2",))
+            build_faiss_index_for_ticker(t, reset=True)
+
+            # 2) retrieve the top chunks for that Form N-2
+            ctx = retrieve_context_for_ticker(t, text, top_k=5)
+            joined = "\n\n---\n\n".join(ctx)
+
+            # 3) ask GPT to extract the four fields as JSON
+            prompt = f"""
+                You are a financial-data extractor. A fund’s Form N-2 contains these fields:
+                • Fund Structure
+                • Fund Subtype
+                • NAV Reporting Frequency
+                • Suitability
+
+                Given the following excerpts from {t}’s Form N-2, extract those four fields and return a JSON object:
+                \"\"\"{joined}\"\"\"
+            """
+            # Call OpenAI API to extract the fields
+            resp = openai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role":"system","content":"You output exactly a JSON object with the requested keys."},
+                    {"role":"user","content":prompt}
+                ],
+                temperature=0.0,
+                max_tokens=200
+            )
+            # Expect resp.choices[0].message.content to be something like:
+            # {"Fund Structure":"Closed-End Fund", "Fund Subtype":"Traded CEF", ...}
+            answers.append(f"{t}: {resp.choices[0].message.content.strip()}")
+        return {"answer":"\n\n".join(answers)}
 
 class RAGFallbackHandler(AskHandler):
     def can_handle(self, text: str) -> bool:
@@ -190,5 +241,6 @@ ASK_HANDLERS: List[AskHandler] = [
     ProfitCompareHandler(),
     ProfitPctCompareHandler(),
     StockNewsHandler(),
+    FormN2Handler(),
     RAGFallbackHandler(),
 ]
