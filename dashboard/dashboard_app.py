@@ -1,6 +1,8 @@
 import streamlit as st
 import requests
 import os
+import json
+import pandas as pd
 
 # Configuration
 API_URL = os.getenv('API_URL', 'http://localhost:8000')
@@ -22,34 +24,40 @@ ticker = st.text_input(
 question = st.text_area("Enter your question about the filings:")
 
 if st.button("Get Answer", key="ask_button"):
-    if not ticker or not question:
-        st.error("Both ticker and question are required.")
+    if not question:
+        st.error("Please enter a question.")
     else:
-        payload = {"ticker": ticker, "text": question}
-        try:
-            resp = requests.post("http://127.0.0.1:8000/ask", json=payload, timeout=30)
-            if resp.status_code == 200:
-                st.subheader("Answer")
-                st.write(resp.json().get("answer", "No answer returned."))
-            else:
-                st.error(f"Error {resp.status_code}: {resp.text}")
-        except requests.RequestException as e:
-            st.error(f"Request failed: {e}")
+        resp = requests.post(f"{API_URL}/ask", json={"text": question}, timeout=30)
+        if resp.status_code == 200:
+            st.subheader("Answer")
 
-num = st.sidebar.slider("Number of Filings to Ingest", min_value=1, max_value=100, value=2)
+            answer = resp.json().get("answer", "")
+            # Try to parse JSON
+            try:
+                data = json.loads(answer)
+                # Display as a table
+                df = pd.DataFrame(list(data.items()), columns=["Field", "Value"])
+                st.table(df)
+            except json.JSONDecodeError:
+                # Fallback: show raw text
+                st.write(answer)
+        else:
+            st.error(f"Error {resp.status_code}: {resp.text}")
+
+# num = st.sidebar.slider("Number of Filings to Ingest", min_value=1, max_value=100, value=2)
 
 # Ingest & classify
-if st.sidebar.button("Ingest & Classify"):
-    with st.spinner("Fetching & classifying filings..."):
-        resp = requests.post(f"{API_URL}/ingest", json={"ticker": ticker, "count": num})
-        if resp.status_code == 200:
-            ingested = resp.json()["ingested"]
-            st.success("Ingestion complete!")
-            for item in ingested:
-                st.subheader(f"{item['form']} on {item['date']}")
-                st.write("**Component:**", item['component'])
-        else:
-            st.error(f"Error ingesting: {resp.text}")
+# if st.sidebar.button("Ingest & Classify"):
+#     with st.spinner("Fetching & classifying filings..."):
+#         resp = requests.post(f"{API_URL}/ingest", json={"ticker": ticker, "count": num})
+#         if resp.status_code == 200:
+#             ingested = resp.json()["ingested"]
+#             st.success("Ingestion complete!")
+#             for item in ingested:
+#                 st.subheader(f"{item['form']} on {item['date']}")
+#                 st.write("**Component:**", item['component'])
+#         else:
+#             st.error(f"Error ingesting: {resp.text}")
 
 # Summarization UI
 st.header("Summarize Text")
