@@ -167,7 +167,11 @@ def choose_and_download(
 
     return out_path
 
-def fetch_for_ticker(ticker: str, count: int = 20) -> list[Path]:
+def fetch_for_ticker(
+    ticker: str,
+    count: int = 20,
+    form_types: tuple = ("10-K","10-Q")
+) -> list[Path]:
     ticker = ticker.upper()
     if ticker not in CIK_MAP:
         raise ValueError(f"Unknown ticker {ticker}. Add it to CIK_MAP.")
@@ -176,9 +180,9 @@ def fetch_for_ticker(ticker: str, count: int = 20) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # 1) Get the small metadata listing of filings
-    filings = get_latest_filings(cik, count=count)
+    filings = get_latest_filings(cik, form_types=form_types, count=count)
 
-    saved_paths: list[Path] = []
+    saved = []
     for f in filings:
         accession = f["accession"]
         base = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}"
@@ -192,13 +196,14 @@ def fetch_for_ticker(ticker: str, count: int = 20) -> list[Path]:
         # 3) Save that full index.json to disk
         idx_path = out_dir / f"{ticker}-{accession}-index.json"
         idx_path.write_text(json.dumps(idx_json, indent=2), encoding="utf-8")
-        saved_paths.append(idx_path)
+        saved.append(idx_path)
 
         # 4) Now that we have a real index.json, pick & download the XBRL/HTML
         choose_and_download(cik, accession, str(idx_path), dest_dir=out_dir)
+        saved.append(idx_path)
 
-    print(f"[edgar_fetch] Fetched {len(saved_paths)} filings for {ticker} into {out_dir}")
-    return saved_paths
+    print(f"[edgar_fetch] Fetched {len(saved)} filings for {ticker} into {out_dir}")
+    return saved
 
 if __name__ == "__main__":
     # Example: fetch & download the last 2 filings for AAPL
@@ -221,6 +226,7 @@ if __name__ == "__main__":
 
     try:
         paths = fetch_for_ticker(args.ticker, count=args.count)
+        fetch_for_ticker("AAPL", count=1, form_types=("N-2",))
         print(f"✅ Saved {len(paths)} index files under ingestion/data/{args.ticker.upper()}/")
     except Exception as e:
         print(f"❌ Error fetching filings for {args.ticker.upper()}: {e}")

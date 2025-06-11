@@ -17,7 +17,7 @@ def extract_tickers_via_gpt(text: str) -> list[str]:
         List only the company names mentioned, comma-separated, nothing else.
         Question: {text}
         """
-    resp = openai.ChatCompletion.create(
+    resp = openai.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "Extract company names, comma-separated."},
