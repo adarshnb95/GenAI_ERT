@@ -178,26 +178,62 @@ def summarize_text(text: str) -> str:
     return resp.choices[0].message.content.strip()
 
 
-def answer_question(question: str) -> str:
+def answer_question_for_ticker(
+    ticker: str,
+    question: str,
+    top_k: int = 5,
+    model: str = "gpt-3.5-turbo"
+) -> str:
     """
-    Full RAG: retrieve context chunks, then ask GPT to answer the question.
+    Retrieval‐augmented QA for a specific ticker.
+    1) retrieve_context_for_ticker → List[str]
+    2) join with separators
+    3) call OpenAI chat.completions API
+    4) return the answer text
     """
-    contexts = retrieve_context(question)
+    # 1) Pull the most relevant chunks
+    contexts = retrieve_context_for_ticker(ticker, question, top_k=top_k)
+    if not contexts:
+        return "No relevant filings found to answer that question."
+
+    # 2) Build the LLM prompt
     joined = "\n\n---\n\n".join(contexts)
     prompt = f"""
-        You are a financial analyst assistant. Use the following document excerpts to answer the question.
+        You are an equity research assistant. Use the following excerpts from {ticker}’s SEC filings to answer the question as factually as possible.
+
         Excerpts:
         {joined}
 
         Question: {question}
         """
+
+    # 3) Call the OpenAI ChatCompletion endpoint
     resp = openai.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model=model,
         messages=[
-            {"role": "system", "content": "You answer financial queries based on provided context."},
-            {"role": "user", "content": prompt}
+            {"role": "system",  "content": "You answer financial queries based on provided context."},
+            {"role": "user",    "content": prompt}
         ],
         temperature=0.0,
         max_tokens=300
     )
+
+    # 4) Extract and return the answer
     return resp.choices[0].message.content.strip()
+
+
+def extract_n2_fields_from_text(raw_text: str, allowed: dict) -> dict:
+    """
+    Rule-based sweep: for each allowed field, look for any of its exact phrases
+    in the raw N-2 text. Return a dict mapping each field → matched phrase or None.
+    """
+    results = {}
+    lower_text = raw_text.lower()
+    for field, options in allowed.items():
+        found = None
+        for opt in options:
+            if opt.lower() in lower_text:
+                found = opt
+                break
+        results[field] = found
+    return results
