@@ -1,9 +1,16 @@
 import re
-from typing import List
-from fastapi import HTTPException
+import json
 import openai
-from ingestion.edgar_fetch import fetch_for_ticker
+from fastapi import HTTPException
+from typing import List
+from pathlib import Path
+from dotenv import load_dotenv
 
+from ingestion.edgar_fetch import fetch_for_ticker
+from summarization.summarize import (
+    build_faiss_index_for_ticker,
+    retrieve_context_for_ticker
+)
 from summarization.extract_metrics import (
     get_latest_revenue,
     get_revenue_by_year,
@@ -13,7 +20,7 @@ from summarization.extract_metrics import (
     get_profit_percentage_by_years,
 )
 from summarization.news_index import retrieve_news_context
-from summarization.summarize import answer_question, build_faiss_index_for_ticker, retrieve_context_for_ticker
+from summarization.summarize import answer_question_for_ticker, extract_n2_fields_from_text
 
 
 class AskHandler:
@@ -37,32 +44,32 @@ class NetIncomeYearHandler(AskHandler):
 
     def handle(self, tickers: List[str], text: str) -> dict:
         year = self.PATTERN.search(text).group(1)
-        answers = []
+        results = {}
         for t in tickers:
             ni = get_net_income_by_year(t, year)
             if ni:
-                answers.append(f"{t} net income {year}: ${ni}")
-        if not answers:
-            return {"answer": f"No net income data found for {', '.join(tickers)} in {year}."}
-        return {"answer": "\n".join(answers)}
+                results[t] = ni
+        if not results:
+            return {"answer": f"No net income data for {', '.join(tickers)} in {year}."}
+        return {"answer": results}
 
 
 class LatestNetIncomeHandler(AskHandler):
     KEYWORDS = ["latest net income", "net income"]
 
     def can_handle(self, text: str) -> bool:
-        txt = text.lower()
-        return any(kw in txt for kw in self.KEYWORDS) and not re.search(r"20\d{2}", text)
+        return (any(kw in text.lower() for kw in self.KEYWORDS)
+                and not re.search(r"20\d{2}", text))
 
     def handle(self, tickers: List[str], text: str) -> dict:
-        answers = []
+        results = {}
         for t in tickers:
             ni = get_latest_net_income(t)
             if ni:
-                answers.append(f"{t} latest net income: ${ni}")
-        if not answers:
+                results[t] = ni
+        if not results:
             raise HTTPException(status_code=400, detail="No net income data available.")
-        return {"answer": "\n".join(answers)}
+        return {"answer": results}
 
 
 class RevenueYearHandler(AskHandler):
@@ -73,14 +80,14 @@ class RevenueYearHandler(AskHandler):
 
     def handle(self, tickers: List[str], text: str) -> dict:
         year = self.PATTERN.search(text).group(1)
-        answers = []
+        results = {}
         for t in tickers:
             rev = get_revenue_by_year(t, year)
             if rev:
-                answers.append(f"{t} revenue {year}: ${rev}")
-        if not answers:
-            return {"answer": f"No revenue data found for {', '.join(tickers)} in {year}."}
-        return {"answer": "\n".join(answers)}
+                results[t] = rev
+        if not results:
+            return {"answer": f"No revenue data for {', '.join(tickers)} in {year}."}
+        return {"answer": results}
 
 
 class LatestRevenueHandler(AskHandler):
@@ -88,35 +95,33 @@ class LatestRevenueHandler(AskHandler):
 
     def can_handle(self, text: str) -> bool:
         txt = text.lower()
-        return any(kw in txt for kw in self.KEYWORDS) and not re.search(r"20\d{2}", text)
+        return (any(kw in txt for kw in self.KEYWORDS)
+                and not re.search(r"20\d{2}", text))
 
     def handle(self, tickers: List[str], text: str) -> dict:
-        answers = []
+        results = {}
         for t in tickers:
             rev = get_latest_revenue(t)
             if rev:
-                answers.append(f"{t} latest revenue: ${rev}")
-        if not answers:
+                results[t] = rev
+        if not results:
             raise HTTPException(status_code=400, detail="No revenue data available.")
-        return {"answer": "\n".join(answers)}
+        return {"answer": results}
 
 
 class ProfitCompareHandler(AskHandler):
-    PATTERN = re.compile(r"\bprofits?\D+?than\D+?([A-Za-z]{2,5})\b", re.IGNORECASE)
-
     def can_handle(self, text: str) -> bool:
         return "profit" in text.lower() and "than" in text.lower()
 
     def handle(self, tickers: List[str], text: str) -> dict:
         if len(tickers) < 2:
             raise HTTPException(status_code=400, detail="Please mention two companies to compare profits.")
-        t1, t2 = tickers[0], tickers[1]
+        t1, t2 = tickers[:2]
         comp = get_net_income_by_years(t1, t2)
-        for year in sorted(comp.keys(), reverse=True):
-            ni1, ni2 = comp[year]
+        for year, (ni1, ni2) in sorted(comp.items(), reverse=True):
             try:
                 if int(ni1) > int(ni2):
-                    return {"answer": f"{t1} had higher net income than {t2} in {year}: ${ni1} vs ${ni2}"}
+                    return {"answer": {"year": year, t1: ni1, t2: ni2}}
             except:
                 continue
         return {"answer": f"No year found where {t1} net income > {t2}."}
@@ -128,13 +133,12 @@ class ProfitPctCompareHandler(AskHandler):
 
     def handle(self, tickers: List[str], text: str) -> dict:
         if len(tickers) < 2:
-            raise HTTPException(status_code=400, detail="Please mention two companies to compare profit percentages.")
-        t1, t2 = tickers[0], tickers[1]
+            raise HTTPException(status=400, detail="Mention two companies to compare profit percentages.")
+        t1, t2 = tickers[:2]
         pct_map = get_profit_percentage_by_years(t1, t2)
-        for year in sorted(pct_map.keys(), reverse=True):
-            pct1, pct2 = pct_map[year]
+        for year, (pct1, pct2) in sorted(pct_map.items(), reverse=True):
             if pct2 > pct1:
-                return {"answer": f"{t2} had higher profit percentage than {t1} in {year}: {pct2}% vs {pct1}%"}
+                return {"answer": {"year": year, t2: f"{pct2}%", t1: f"{pct1}%"}}
         return {"answer": f"No year found where {t2} profit percentage > {t1}."}
 
 
@@ -145,94 +149,143 @@ class StockNewsHandler(AskHandler):
         return any(kw in text.lower() for kw in self.KEYWORDS)
 
     def handle(self, tickers: List[str], text: str) -> dict:
-        answers = []
+        results = {}
         for t in tickers:
             latest_rev = get_latest_revenue(t)
             try:
                 news = retrieve_news_context(t, text, top_k=5)
-            except Exception:
+            except:
                 news = []
             joined = "\n\n---\n\n".join(news)
             prompt = (
                 f"You are an equity research assistant. {t}’s most recent revenue was ${latest_rev}.\n\n"
                 f"Recent news:\n{joined}\n\nQuestion: {text}"
             )
-            resp = openai.ChatCompletion.create(
+            resp = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are a financial analyst."},
-                    {"role": "user", "content": prompt}
+                    {"role":"system","content":"You are a financial analyst."},
+                    {"role":"user","content":prompt}
                 ],
                 temperature=0.2,
                 max_tokens=200
             )
-            answers.append(f"{t} analysis:\n" + resp.choices[0].message.content.strip())
-        return {"answer": "\n\n".join(answers)}
+            results[t] = resp.choices[0].message.content.strip()
+        return {"answer": results}
+
 
 class FormN2Handler(AskHandler):
-    """
-    Triggered when the question mentions Form N-2.
-    Fetches the N-2 filing, retrieves its text chunks, then asks GPT to extract:
-      • Fund Structure
-      • Fund Subtype
-      • NAV Reporting Frequency
-      • Suitability
-    """
     PATTERN = re.compile(r"\bform\s*n-2\b", re.IGNORECASE)
+
+    # Controlled vocabularies
+    ALLOWED = {
+        "Fund Structure": [
+            "Closed End Fund",
+            "Business Development Company"
+        ],
+        "Fund Subtype": [
+            "Interval Fund",
+            "Tender Offer Fund",
+            "Traded CEF",
+            "Other Non Traded CEF",
+            "Non Traded BDC",
+            "Traded BDC"
+        ],
+        "NAV Reporting Frequency": [
+            "Daily",
+            "Monthly",
+            "Quarterly",
+            "Not Applicable"
+        ],
+        "Suitability": [
+            "Accredited Investor",
+            "Qualified Client",
+            "Qualified Purchaser",
+            "No Restriction"
+        ]
+    }
 
     def can_handle(self, text: str) -> bool:
         return bool(self.PATTERN.search(text))
 
     def handle(self, tickers: List[str], text: str) -> dict:
-        answers = []
-        for t in tickers:
-            # 1) ingest only N-2
-            fetch_for_ticker(t, count=1, form_types=("N-2",))
-            build_faiss_index_for_ticker(t, reset=True)
+        import openai
+        from pathlib import Path
 
-            # 2) retrieve the top chunks for that Form N-2
-            ctx = retrieve_context_for_ticker(t, text, top_k=5)
-            joined = "\n\n---\n\n".join(ctx)
+        t = tickers[0]
+        fetched = fetch_for_ticker(t, count=1, form_types=("N-2",))
+        if not fetched:
+            raise HTTPException(404, f"No Form N-2 found for {t}.")
+        build_faiss_index_for_ticker(t, reset=True)
 
-            # 3) ask GPT to extract the four fields as JSON
-            prompt = f"""
-                You are a financial-data extractor. A fund’s Form N-2 contains these fields:
-                • Fund Structure
-                • Fund Subtype
-                • NAV Reporting Frequency
-                • Suitability
+        # Grab the raw file
+        data_dir = Path(__file__).parent.parent / "ingestion" / "data" / t
+        raw_file = next(data_dir.glob("*.xml"), None) or next(data_dir.glob("*.htm*"), None)
+        if not raw_file:
+            raise HTTPException(500, f"No downloaded Form N-2 for {t}.")
+        raw = raw_file.read_text(encoding="utf-8", errors="ignore")
 
-                Given the following excerpts from {t}’s Form N-2, extract those four fields and return a JSON object:
-                \"\"\"{joined}\"\"\"
+        # Few‐shot prompt
+        example = """
+            Example:
+            Excerpt: "This closed end fund is a Traded CEF. NAV is calculated Daily. Only Accredited Investors may purchase."
+            JSON:
+            {"Fund Structure":"Closed End Fund","Fund Subtype":"Traded CEF","NAV Reporting Frequency":"Daily","Suitability":"Accredited Investor"}
             """
-            # Call OpenAI API to extract the fields
-            resp = openai.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role":"system","content":"You output exactly a JSON object with the requested keys."},
-                    {"role":"user","content":prompt}
-                ],
-                temperature=0.0,
-                max_tokens=200
-            )
-            # Expect resp.choices[0].message.content to be something like:
-            # {"Fund Structure":"Closed-End Fund", "Fund Subtype":"Traded CEF", ...}
-            answers.append(f"{t}: {resp.choices[0].message.content.strip()}")
-        return {"answer":"\n\n".join(answers)}
+        prompt = f"""
+            You are a financial data extractor. I will give you excerpts from a fund’s Form N-2. You must output EXACTLY one JSON object with these four keys (and only these keys): 
+            • Fund Structure  (must be "Closed End Fund" or "Business Development Company")
+            • Fund Subtype    (one of "Interval Fund","Tender Offer Fund","Traded CEF","Other Non Traded CEF","Non Traded BDC","Traded BDC")
+            • NAV Reporting Frequency ("Daily","Monthly","Quarterly","Not Applicable")
+            • Suitability     ("Accredited Investor","Qualified Client","Qualified Purchaser","No Restriction")
+
+            {example}
+
+            Now, here are the excerpts:
+            \"\"\"
+            {raw[:2000]}  # first 2000 characters
+            \"\"\"
+
+            JSON:
+            """
+        resp = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role":"system","content":"You extract structured data exactly as JSON."},
+                {"role":"user","content":prompt}
+            ],
+            temperature=0.0,
+            max_tokens=200
+        )
+
+        # Parse the response
+        content = resp.choices[0].message.content.strip()
+        # strip code fences if any
+        content = re.sub(r"```json(.*?)```", r"\1", content, flags=re.S).strip()
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            raise HTTPException(500, detail=f"Failed to parse JSON from GPT:\n{content}")
+
+        # Final sanity‐check: ensure all keys present
+        for key in self.ALLOWED:
+            if key not in parsed:
+                parsed[key] = "Unknown"
+        return {"answer": parsed}
+
 
 class RAGFallbackHandler(AskHandler):
     def can_handle(self, text: str) -> bool:
         return True
 
     def handle(self, tickers: List[str], text: str) -> dict:
-        answers = []
+        results = {}
         for t in tickers:
-            ans = answer_question(t, text)
-            answers.append(f"{t}: {ans}")
-        return {"answer": "\n\n".join(answers)}
+            ans = answer_question_for_ticker(t, text)
+            results[t] = ans
+        return {"answer": results}
 
 
-# Ordered list of handlers; more specific first
 ASK_HANDLERS: List[AskHandler] = [
     NetIncomeYearHandler(),
     LatestNetIncomeHandler(),

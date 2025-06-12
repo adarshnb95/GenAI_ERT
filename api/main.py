@@ -1,15 +1,16 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
+from pydantic import BaseModel, Field
+from pathlib import Path
 import uvicorn
 import re
 from summarization.summarize import build_faiss_index_for_ticker, summarize_text, retrieve_context_for_ticker
 # Ingestion functions
-from ingestion.edgar_fetch import get_latest_filings, download_filing_index, choose_and_download, fetch_for_ticker
+from ingestion.edgar_fetch import get_latest_filings, choose_and_download, fetch_for_ticker
 # Classification utility
 from classifier.predict import classify_text
 from api.ask_handlers import ASK_HANDLERS
-from api.utils import extract_tickers_via_gpt
+from api.utils import extract_tickers_from_text
 
 # Summarization placeholder (to be implemented)
 # from summarization.summarize import summarize_text
@@ -21,8 +22,12 @@ app = FastAPI(
 )
 
 class IngestRequest(BaseModel):
-    ticker: str
-    count: int = 2  # number of recent filings to ingest
+    ticker: str = Field(..., description="Stock ticker, e.g. 'AAPL'")
+    count: int = Field(20, description="Max number of filings to fetch")
+    form_types: Optional[List[str]] = Field(
+        None,
+        description="List of SEC form types, e.g. ['10-K','N-2']; defaults to ['10-K','10-Q']"
+    )
 
 class ClassifyRequest(BaseModel):
     text: str
@@ -33,24 +38,39 @@ class AskRequest(BaseModel):
 TICKER_YEAR_PATTERN = re.compile(r"\b([A-Za-z]{2,5})\D+?(20\d{2})\b")
 
 @app.post("/ingest")
-async def ingest(request: IngestRequest):
-    cik = None
-    try:
-        cik = get_latest_filings.__globals__['TICKER_CIK'][request.ticker.upper()]
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Ticker not found")
+async def ingest(req: IngestRequest):
+    ticker = req.ticker.upper()
+    count  = req.count
+    forms  = tuple(req.form_types) if req.form_types else ("10-K","10-Q")
 
+    # 1) Fetch filings (does dynamic CIK lookup & download)
+    try:
+        index_paths = fetch_for_ticker(ticker, count=count, form_types=forms)
+    except ValueError as e:
+        # e.g. unknown ticker
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ingestion error: {e}")
+
+    # 2) Build/update FAISS index (non-blocking)
+    try:
+        build_faiss_index_for_ticker(ticker, reset=False)
+    except Exception:
+        # log but don’t fail the ingest call
+        print(f"[ingest] could not build FAISS index for {ticker}")
+
+    # 3) Summarize what got saved
     results = []
-    filings = get_latest_filings(cik, count=request.count)
-    for f in filings:
-        basename = f['filename']
-        idx_path = download_filing_index(cik, f['accession'], basename)
-        component_name = choose_and_download(cik, f['accession'], idx_path)
+    for idx in index_paths:
+        stem   = Path(idx).stem  # e.g. "PTY-000012345678-index"
+        folder = Path(idx).parent
+        comps  = [p.name for p in folder.iterdir()
+                  if p.name.startswith(stem) and p.name != Path(idx).name]
         results.append({
-            "form": f['form'],
-            "date": f['date'],
-            "component": component_name
+            "index_file": Path(idx).name,
+            "components": comps
         })
+
     return {"ingested": results}
 
 @app.post("/classify")
@@ -78,7 +98,7 @@ async def ask(req: AskRequest):
     question = req.text.strip()
 
     # 1) Use GPT to pull company names → tickers
-    tickers = extract_tickers_via_gpt(question)
+    tickers = extract_tickers_from_text(question)
     if not tickers:
         raise HTTPException(400, "Couldn't identify any known companies in your question.")
 
