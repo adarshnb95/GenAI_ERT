@@ -1,10 +1,11 @@
-import re
+import re, datetime
 import json
 import openai
 from fastapi import HTTPException
 from typing import List
 from pathlib import Path
 from dotenv import load_dotenv
+
 
 from ingestion.edgar_fetch import fetch_for_ticker
 from summarization.summarize import (
@@ -71,24 +72,42 @@ class LatestNetIncomeHandler(AskHandler):
             raise HTTPException(status_code=400, detail="No net income data available.")
         return {"answer": results}
 
-
-class RevenueYearHandler(AskHandler):
-    PATTERN = re.compile(r"\brevenue\D+?(20\d{2})\b", re.IGNORECASE)
+class YearPerformanceHandler(AskHandler):
+    # catch “revenue”, “perform(ed)”, “earnings”, “profit(s)”, etc. plus a year
+    PATTERN = re.compile(
+        r"\b(?:revenue|earnings|net income|perform(?:ed)?|how did)\b.*?\b(20\d{2})\b",
+        re.IGNORECASE
+    )
 
     def can_handle(self, text: str) -> bool:
         return bool(self.PATTERN.search(text))
 
     def handle(self, tickers: List[str], text: str) -> dict:
-        year = self.PATTERN.search(text).group(1)
-        results = {}
-        for t in tickers:
-            rev = get_revenue_by_year(t, year)
-            if rev:
-                results[t] = rev
-        if not results:
-            return {"answer": f"No revenue data for {', '.join(tickers)} in {year}."}
-        return {"answer": results}
+        import datetime
+        from fastapi import HTTPException
+        from ingestion.edgar_fetch import fetch_for_ticker
+        from summarization.summarize import build_faiss_index_for_ticker
+        from summarization.extract_metrics import get_revenue_by_year
 
+        year   = int(self.PATTERN.search(text).group(1))
+        ticker = tickers[0]
+
+        # 1) compute how many filings to fetch
+        current_year = datetime.date.today().year
+        years_back   = current_year - year + 1
+        count        = years_back * 5 + 3
+
+        # 2) re-fetch & index
+        fetched = fetch_for_ticker(ticker, count=count, form_types=("10-K","10-Q"))
+        if not fetched:
+            raise HTTPException(404, f"No filings for {ticker} back to {year}.")
+        build_faiss_index_for_ticker(ticker, reset=True)
+
+        # 3) extract the revenue
+        rev = get_revenue_by_year(ticker, year)
+        if not rev:
+            return {"answer": f"No revenue data found for {ticker} in {year}."}
+        return {"answer": {ticker: rev}}
 
 class LatestRevenueHandler(AskHandler):
     KEYWORDS = ["latest revenue", "recent revenue", "revenue"]
@@ -304,7 +323,7 @@ class RAGFallbackHandler(AskHandler):
 ASK_HANDLERS: List[AskHandler] = [
     NetIncomeYearHandler(),
     LatestNetIncomeHandler(),
-    RevenueYearHandler(),
+    YearPerformanceHandler(),
     LatestRevenueHandler(),
     ProfitCompareHandler(),
     ProfitPctCompareHandler(),

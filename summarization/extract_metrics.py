@@ -3,6 +3,7 @@
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Optional, Union
 
 # Same DOCS_DIR as before
 DOCS_DIR = Path(__file__).parent.parent / "ingestion" / "data"
@@ -34,26 +35,32 @@ def _collect_xbrl_instances_by_ticker(ticker: str) -> dict[str, Path]:
 
     return revenue_by_year
 
-def get_revenue_by_year(ticker: str, year: str) -> str:
+def get_revenue_by_year(ticker: str, year: Union[int, str]) -> Optional[str]:
     """
-    Reads <Revenues> or <SalesRevenueNet> from the Q4 XBRL for 'ticker' in 'year'.
-    Returns the numeric text, e.g. '274515000000', or '' if not found.
+    Extracts the revenue line item from the year-end (Q4) XBRL for `ticker` in `year`.
+    Returns the raw string (e.g. '274515000000'), or None if not found.
     """
-    revenue_map = _collect_xbrl_instances_by_ticker(ticker)
-    xbrl_file = revenue_map.get(year)
-    if not xbrl_file:
-        return ""
+    year = str(year)
+    # Collect all XBRL instances, keyed by year
+    revenue_map = _collect_xbrl_instances_by_ticker(ticker)  # → Dict[str, List[Path]]
+    candidates = revenue_map.get(year)
+    if not candidates:
+        return None
 
-    tree = ET.parse(str(xbrl_file))
+    # Prefer the 10-K (Dec 31) instance
+    q4_files = [p for p in candidates if "1231" in p.name]
+    xml_file = q4_files[0] if q4_files else candidates[0]
+
+    tree = ET.parse(str(xml_file))
     root = tree.getroot()
 
-    for elem in root.findall(".//*"):
-        tag = elem.tag
-        if "}" in tag:
-            tag = tag.split("}", 1)[1]
-        if tag in ("Revenues", "SalesRevenueNet"):
-            return elem.text or ""
-    return ""
+    for local in ("Revenues", "SalesRevenueNet"):
+        # search all namespaces by local-name()
+        el = root.find(f".//*[local-name()='{local}']")
+        if el is not None and el.text:
+            return el.text.strip()
+
+    return None
 
 def get_latest_net_income() -> str:
     """
