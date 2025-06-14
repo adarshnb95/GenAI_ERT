@@ -1,5 +1,3 @@
-# test_model.py
-
 from transformers import DistilBertForSequenceClassification, DistilBertTokenizerFast
 import torch
 

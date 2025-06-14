@@ -57,24 +57,33 @@ A full-stack Python application for automated EDGAR filings ingestion, FAISS-bas
 ```
 GenAI_ERT/
 ├── api/
-│   ├── ask_handlers.py       # Handler classes for question routing
-│   └── main.py               # FastAPI app (factory mode)
+│   ├── main.py
+│   ├── ask_handlers.py
+│   └── utils.py
 ├── ingestion/
-│   ├── edgar_fetch.py        # Fetch filings per ticker
-│   ├── news_fetch.py         # (Optional) Fetch news via NewsAPI
-│   ├── data/                 # Raw filings stored per ticker
-│   └── news_data/            # Raw news JSON per ticker
+│   ├── edgar_fetch.py
+│   ├── company_tickers.json  # fetched at runtime
+│   └── data/
+│       ├── AAPL/… 
+│       ├── EOD/…
+│       └── PTY/…
 ├── summarization/
-│   ├── summarize.py          # RAG logic, build/retrieve FAISS index
-│   ├── extract_metrics.py     # XBRL parsing helpers
-│   ├── news_index.py         # Build/retrieve news FAISS index
-│   └── faiss_index/          # Per-ticker FAISS indexes & metadata
-├── tests/                    # Unit & end-to-end tests
-├── dashboard_app.py          # Streamlit frontend
-├── run_pipeline.py           # Ingest → Index automation
-├── start_app.py              # Launch backend + frontend
-├── requirements.txt          # Python dependencies
-└── README.md                 # Project documentation
+│   ├── summarize.py
+│   ├── extract_metrics.py
+│   ├── news_index.py
+│   └── faiss_index/
+├── classifier/
+│   ├── train_classifier.py
+│   ├── predict.py
+│   └── checkpoint/  # model.safetensors, tokenizer.json, …
+├── dashboard/
+│   └── dashboard_app.py
+├── scripts/
+│   └── inspect_index.py
+├── start_app.py
+├── README.md
+├── requirements.txt
+└── .gitignore
 ```
 
 ---
@@ -218,13 +227,13 @@ python start_app.py
 * Adapt FastAPI `/ask` to consume `ticker` from request
 
  feature/api
-**Day 4: Handler-Based Routing & Tests**
+**Day 4: Handler-Based Routing & Tests** (Completed)
 
 * Implement `api/ask_handlers.py` with modular handlers
 * Refactor `/ask` in `api/main.py` to loop through `ASK_HANDLERS`
 * Write unit tests for each handler with TestClient
 
-**Day 5: Performance & Polish**
+**Day 5: Performance & Polish** (Pending)
 
 * Lazy-load heavy models and FAISS imports
 * Switch to Uvicorn factory mode and limit reload dirs
