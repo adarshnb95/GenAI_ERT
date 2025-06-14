@@ -71,7 +71,7 @@ def extract_tickers_from_text(text: str) -> List[str]:
     if tickers:
         return tickers
 
-    # 2) GPT fallback: ask for tickers directly
+    # GPT fallback
     prompt = (
         "List all stock ticker symbols mentioned in this question, comma-separated, "
         "with nothing else. If you see none, say NONE.\n\n"
@@ -84,9 +84,11 @@ def extract_tickers_from_text(text: str) -> List[str]:
             {"role":"user","content":prompt}
         ],
         temperature=0.0,
-        max_tokens=20
+        max_tokens=30
     )
     content = resp.choices[0].message.content.strip()
     # Split on commas, strip, uppercase
     symbols = [s.strip().upper() for s in content.split(",") if s.strip()]
+    # *** Filter out any “NONE” or non-alphanumeric tokens ***
+    symbols = [s for s in symbols if s.isalpha() and s.upper() != "NONE"]
     return symbols
