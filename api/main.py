@@ -23,7 +23,7 @@ app = FastAPI(
 
 class IngestRequest(BaseModel):
     ticker: str = Field(..., description="Stock ticker, e.g. 'AAPL'")
-    count: int = Field(20, description="Max number of filings to fetch")
+    count: int = Field(50, description="Max number of filings to fetch")
     form_types: Optional[List[str]] = Field(
         None,
         description="List of SEC form types, e.g. ['10-K','N-2']; defaults to ['10-K','10-Q']"
@@ -96,18 +96,11 @@ YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 @app.post("/ask")
 async def ask(req: AskRequest):
     question = req.text.strip()
-
-    # 1) Use GPT to pull company names → tickers
-    tickers = extract_tickers_from_text(question)
+    tickers  = extract_tickers_from_text(question)
     if not tickers:
-        raise HTTPException(400, "Couldn't identify any known companies in your question.")
+        raise HTTPException(400, "Couldn't identify any known companies.")
 
-    # 2) Ensure data/index exist for each ticker
-    for ticker in tickers:
-        fetch_for_ticker(ticker)
-        build_faiss_index_for_ticker(ticker, reset=False)
-
-    # 3) Dispatch to handlers (each now accepts List[str], text)
+    # 3) Dispatch to handlers (they must fetch/index as needed)
     for handler in ASK_HANDLERS:
         if handler.can_handle(question):
             return handler.handle(tickers, question)

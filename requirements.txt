@@ -14,3 +14,4 @@ scikit-learn
 python-dotenv
 newsapi-python
 fire
+PyPDF2
