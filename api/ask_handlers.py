@@ -266,6 +266,21 @@ class FormN2Handler(AskHandler):
             parsed = json.loads(content)
         except json.JSONDecodeError:
             raise HTTPException(500, detail=f"Failed to parse JSON from GPT:\n{content}")
+        
+        if not parsed.get("NAV Reporting Frequency") or parsed["NAV Reporting Frequency"] == "Unknown":
+        # look for any of the four allowed keywords
+            nav_match = re.search(
+                r"\b(Daily|Monthly|Quarterly|Not Applicable)\b",
+                raw,
+                flags=re.IGNORECASE
+            )
+            if nav_match:
+                # normalize casing to Title Case
+                parsed["NAV Reporting Frequency"] = nav_match.group(1).title()
+
+        # 2) Ensure it’s never empty
+        if not parsed.get("NAV Reporting Frequency"):
+            parsed["NAV Reporting Frequency"] = "Unknown"
 
         # Final sanity‐check: ensure all keys present
         for key in self.ALLOWED:
