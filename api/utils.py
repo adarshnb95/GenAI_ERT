@@ -60,20 +60,21 @@ def extract_company_names(text: str) -> List[str]:
 
 def extract_tickers_from_text(text: str) -> List[str]:
     # 1) Try finding uppercase tokens 2–5 letters that Yahoo recognizes
-    candidates = re.findall(r"\b[A-Z]{2,5}\b", text)
-    validated = []
-    for tok in candidates:
-        if tok not in validated:
-            resolved = lookup_ticker(tok)
-            if resolved and resolved.upper() == tok:
-                validated.append(tok)
-    if validated:
-        return validated
+    raw_candidates = re.findall(r"\b[A-Z]{2,4}\b", text)
+    tickers = []
+    for tok in raw_candidates:
+        # 2) Confirm that Yahoo (or SEC CIK map) agrees it's a real symbol
+        resolved = lookup_ticker(tok)
+        if resolved and resolved.upper() == tok and tok not in tickers:
+            tickers.append(tok)
+
+    if tickers:
+        return tickers
 
     # 2) GPT fallback: ask for tickers directly
     prompt = (
-        "Extract all stock ticker symbols mentioned in this question, "
-        "and list them comma-separated, nothing else:\n\n"
+        "List all stock ticker symbols mentioned in this question, comma-separated, "
+        "with nothing else. If you see none, say NONE.\n\n"
         f"{text}"
     )
     resp = openai.chat.completions.create(
@@ -83,7 +84,7 @@ def extract_tickers_from_text(text: str) -> List[str]:
             {"role":"user","content":prompt}
         ],
         temperature=0.0,
-        max_tokens=32
+        max_tokens=20
     )
     content = resp.choices[0].message.content.strip()
     # Split on commas, strip, uppercase
