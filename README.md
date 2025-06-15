@@ -265,6 +265,7 @@ pytest -q tests/
 
 1. I noticed that the SEC files had already classified the files as 10-K and 10-Q, so I created a generate_labels.py that helped me generate test data using the official classification.
 2. I created an extract_metrics.py file that helps in collecting the files required according to the question asked.
+3. Some errors identified in the approach, so changing the structure of the layout and the way questions are answered. More logical answers will use the gpt enhanced FAISS/LLM whereas simple questions will just use XBRL parsing.
 
 ---
 
