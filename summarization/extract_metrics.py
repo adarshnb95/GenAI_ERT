@@ -3,7 +3,7 @@
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Dict, List
 
 # Same DOCS_DIR as before
 DOCS_DIR = Path(__file__).parent.parent / "ingestion" / "data"
@@ -37,29 +37,29 @@ def _collect_xbrl_instances_by_ticker(ticker: str) -> dict[str, Path]:
 
 def get_revenue_by_year(ticker: str, year: Union[int, str]) -> Optional[str]:
     """
-    Extracts the revenue line item from the year-end (Q4) XBRL for `ticker` in `year`.
+    Extracts the 'Revenues' or 'SalesRevenueNet' line item from the Q4 XBRL for `ticker` in `year`.
     Returns the raw string (e.g. '274515000000'), or None if not found.
     """
-    year = str(year)
-    # Collect all XBRL instances, keyed by year
-    revenue_map = _collect_xbrl_instances_by_ticker(ticker)  # → Dict[str, List[Path]]
-    candidates = revenue_map.get(year)
+    year_str = str(year)
+    revenue_map = _collect_xbrl_instances_by_ticker(ticker)
+    candidates = revenue_map.get(year_str)
     if not candidates:
         return None
 
-    # Prefer the 10-K (Dec 31) instance
-    q4_files = [p for p in candidates if "1231" in p.name]
+    # Prefer Q4 (Dec 31) filings
+    q4_files = [p for p in candidates if '1231' in p.name]
     xml_file = q4_files[0] if q4_files else candidates[0]
 
     tree = ET.parse(str(xml_file))
     root = tree.getroot()
 
-    for local in ("Revenues", "SalesRevenueNet"):
-        # search all namespaces by local-name()
-        el = root.find(f".//*[local-name()='{local}']")
-        if el is not None and el.text:
-            return el.text.strip()
-
+    # Iterate through all elements and match local tag names
+    for elem in root.iter():
+        tag = elem.tag
+        if '}' in tag:
+            tag = tag.split('}', 1)[1]
+        if tag in ('Revenues', 'SalesRevenueNet') and elem.text:
+            return elem.text.strip()
     return None
 
 def get_latest_net_income() -> str:
@@ -119,27 +119,34 @@ def get_latest_revenue() -> str:
         if tag in ("Revenues", "SalesRevenueNet"):
             values.append(elem.text or "")
 
-    return values[0] if values else ""
+    return values[0] if values else None
 
-def get_net_income_by_year(ticker: str, year: str) -> str:
+def get_net_income_by_year(ticker: str, year: Union[int, str]) -> Optional[str]:
     """
-    Return <NetIncomeLoss> for the given ticker and calendar year’s Q4 XBRL.
-    Very similar to get_revenue_by_year but looks for NetIncomeLoss.
+    Extracts the 'NetIncomeLoss' line item from the Q4 XBRL for `ticker` in `year`.
+    Returns the raw string (e.g. '57411000000'), or None if not found.
     """
-    mapping = _collect_xbrl_instances_by_ticker(ticker)
-    file_path = mapping.get(year)
-    if not file_path:
-        return ""
+    year_str = str(year)
+    income_map = _collect_xbrl_instances_by_ticker(ticker)
+    candidates = income_map.get(year_str)
+    if not candidates:
+        return None
 
-    tree = ET.parse(str(file_path))
+    # Prefer Q4 (Dec 31) filings
+    q4_files = [p for p in candidates if '1231' in p.name]
+    xml_file = q4_files[0] if q4_files else candidates[0]
+
+    tree = ET.parse(str(xml_file))
     root = tree.getroot()
-    for elem in root.findall(".//*"):
+
+    for elem in root.iter():
         tag = elem.tag
-        if "}" in tag:
-            tag = tag.split("}", 1)[1]
-        if tag == "NetIncomeLoss":
-            return elem.text or ""
-    return ""
+        if '}' in tag:
+            tag = tag.split('}', 1)[1]
+        if tag == 'NetIncomeLoss' and elem.text:
+            return elem.text.strip()
+    return None
+
 
 def get_net_income_by_years(ticker1: str, ticker2: str) -> dict[str, tuple]:
     """
