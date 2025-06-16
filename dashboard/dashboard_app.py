@@ -17,29 +17,35 @@ tab_ask, tab_classifier = st.tabs(["Ask a Question", "Document Classifier"])
 with tab_ask:
     st.title("Generative AI Equity Research Tool")
     question = st.text_area("Enter your question about any company or companies:")
+
     if st.button("Get Answer", key="ask_button"):
         if not question:
             st.error("Please enter a question.")
         else:
-            try:
-                resp = requests.post(f"{API_URL}/ask", json={"text": question}, timeout=30)
-                if resp.status_code == 200:
-                    st.subheader("Answer")
-                    answer_obj = resp.json().get("answer")
-                    # Check for structured N-2 response
-                    if isinstance(answer_obj, dict) and set(answer_obj.keys()) == N2_FIELDS:
-                        df = pd.DataFrame(list(answer_obj.items()), columns=["Field", "Value"])
-                        st.table(df)
-                    else:
-                        # Display all other responses as plain text or JSON
-                        if isinstance(answer_obj, dict):
-                            st.json(answer_obj)
-                        else:
-                            st.write(answer_obj)
+            # 1) Phase 1: Fetch & index all needed filings
+            with st.spinner("🔄 Fetching filings and building index… this can take a few minutes"):
+                # you can optionally parse out a year and pass count if you like
+                # here we just do the default ingest so your handlers see fresh data
+                ingest_payload = {"ticker": "AAPL", "count": 100}
+                ing = requests.post(f"{API_URL}/ingest", json=ingest_payload)
+                if ing.status_code != 200:
+                    st.error(f"Ingest failed: {ing.text}")
+                    st.stop()
+                st.success("✅ Filings fetched & indexed")
+
+            # 2) Phase 2: Send the actual question
+            with st.spinner("💡 Generating answer…"):
+                resp = requests.post(f"{API_URL}/ask", json={"text": question})
+            if resp.status_code == 200:
+                st.subheader("Answer")
+                answer_obj = resp.json().get("answer")
+                if isinstance(answer_obj, dict):
+                    df = pd.DataFrame(list(answer_obj.items()), columns=["Field","Value"])
+                    st.table(df)
                 else:
-                    st.error(f"Error {resp.status_code}: {resp.text}")
-            except requests.RequestException as e:
-                st.error(f"Request failed: {e}")
+                    st.write(answer_obj)
+            else:
+                st.error(f"Error {resp.status_code}: {resp.text}")
 
 # Document Classifier Tab
 with tab_classifier:
