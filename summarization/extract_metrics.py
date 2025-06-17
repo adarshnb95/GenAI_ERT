@@ -1,13 +1,27 @@
-# File: summarization/extract_metrics.py
-
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional, Union, Dict, List
+from datetime import datetime
 
 # Same DOCS_DIR as before
 DOCS_DIR = Path(__file__).parent.parent / "ingestion" / "data"
 FILENAME_PATTERN = re.compile(r"^aapl-(\d{8})\.xml$", re.IGNORECASE)
+
+def _pick_latest_for_year(candidates: List[Path], year: str) -> Path:
+    # Extract YYYYMMDD from each filename, parse to datetime, default to very old if missing
+    def _date_of(p: Path):
+        m = re.search(r'(\d{8})', p.name)
+        if m:
+            return datetime.strptime(m.group(1), "%Y%m%d")
+        return datetime.min
+
+    # Filter only files whose date starts with the target year, then pick the newest
+    year_files = [p for p in candidates if p.name.startswith(f"{p.stem.split('-')[0].lower()}-{year}")]
+    if year_files:
+        return max(year_files, key=_date_of)
+    # Fallback: just take the newest overall
+    return max(candidates, key=_date_of)
 
 def _collect_xbrl_instances_by_ticker(ticker: str) -> dict[str, Path]:
     """
@@ -47,8 +61,7 @@ def get_revenue_by_year(ticker: str, year: Union[int, str]) -> Optional[str]:
         return None
 
     # Prefer Q4 (Dec 31) filings
-    q4_files = [p for p in candidates if '1231' in p.name]
-    xml_file = q4_files[0] if q4_files else candidates[0]
+    xml_file = _pick_latest_for_year(candidates, year_str)
 
     tree = ET.parse(str(xml_file))
     root = tree.getroot()
@@ -133,8 +146,7 @@ def get_net_income_by_year(ticker: str, year: Union[int, str]) -> Optional[str]:
         return None
 
     # Prefer Q4 (Dec 31) filings
-    q4_files = [p for p in candidates if '1231' in p.name]
-    xml_file = q4_files[0] if q4_files else candidates[0]
+    xml_file = _pick_latest_for_year(candidates, year_str)
 
     tree = ET.parse(str(xml_file))
     root = tree.getroot()

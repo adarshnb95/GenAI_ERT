@@ -23,7 +23,6 @@ from summarization.extract_metrics import (
 from summarization.news_index import retrieve_news_context
 from summarization.summarize import answer_question_for_ticker, extract_n2_fields_from_text
 
-
 class AskHandler:
     """
     Base class for `/ask` handlers. Subclasses implement:
