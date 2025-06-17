@@ -1,11 +1,13 @@
 # File: ingestion/edgar_fetch.py
-import json
+import json, os
 import requests
 from pathlib import Path
 from typing import List, Optional
+import boto3
 
 # SEC company tickers JSON for dynamic CIK lookup
 CIK_JSON_URL = "https://www.sec.gov/files/company_tickers.json"
+XBRL_EXCLUDE = ("_cal.xml", "_def.xml", "_lab.xml", "_pre.xml", "_htm.xml")
 
 HEADERS = {
     "User-Agent": "Your Name your.email@example.com",
@@ -18,6 +20,21 @@ DATA_ROOT = Path(__file__).parent / "data"
 # Cache for ticker→CIK mapping
 _cik_map = None
 
+_S3 = boto3.client(
+    's3',
+    region_name=os.getenv('AWS_REGION'),
+    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+)
+_BUCKET = os.getenv('EDGAR_S3_BUCKET')
+
+def _upload_to_s3(local_path: Path, s3_key: str) -> None:
+    """Upload a local file to S3 under the given key."""
+    _S3.upload_file(
+        Filename=str(local_path),
+        Bucket=_BUCKET,
+        Key=s3_key
+    )
 
 def get_cik_for_ticker(ticker: str) -> Optional[str]:
     """
@@ -70,74 +87,110 @@ def choose_and_download(
     dest_dir: Path
 ) -> Optional[Path]:
     """
-    Given an EDGAR index JSON, pick the primary XBRL instance or HTML and download it.
-    Returns the Path to the saved file or None on failure.
+    Pick the primary XBRL instance (or fallback to HTML/zip), download it, 
+    and return the local Path (or None if not found/download fails).
     """
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    with open(index_path, "r", encoding="utf-8") as f:
-        idx = json.load(f)
-    items = idx.get("directory", {}).get("item", [])
+    # 1) Load index once
+    with open(index_path, encoding="utf-8") as f:
+        items = f.read()
+    idx = json.loads(items).get("directory", {}).get("item", [])
 
-    instance_name = None
-    for entry in items:
-        name = entry.get("name", "")
-        lower = name.lower()
-        if lower.endswith(".xml") and not any(
-            lower.endswith(s) for s in ("_cal.xml","_def.xml","_lab.xml","_pre.xml","_htm.xml")
-        ) and lower != "filingsummary.xml":
-            instance_name = name
+    # 2) Pick file in priority order
+    xbrls = [
+        e["name"] for e in idx
+        if e["name"].lower().endswith(".xml")
+        and not any(e["name"].lower().endswith(exc) for exc in XBRL_EXCLUDE)
+    ]
+    htmls = [e["name"] for e in idx if e["name"].lower().endswith((".htm", ".html"))]
+    zips  = [e["name"] for e in idx if e["name"].lower().endswith(".xbrl.zip")]
+
+    for choice_list in (xbrls, htmls, zips):
+        if choice_list:
+            filename = choice_list[0]
             break
-    if not instance_name:
-        for entry in items:
-            name = entry.get("name", "")
-            if name.lower().endswith((".htm", ".html")):
-                instance_name = name
-                break
-    if not instance_name:
-        print(f"[WARN] No XBRL/HTML found for CIK={cik}, accession={accession}")
+    else:
+        print(f"[WARN] No XBRL/HTML/ZIP found for CIK={cik}, accession={accession}")
         return None
 
-    url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/{instance_name}"
+    # 3) Download
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/{filename}"
     resp = requests.get(url, headers=HEADERS)
     try:
         resp.raise_for_status()
     except Exception as e:
-        print(f"[ERROR] Download failed for {instance_name}: {e}")
+        print(f"[ERROR] Download failed for {filename}: {e}")
         return None
 
-    out_path = dest_dir / instance_name
+    out_path = dest_dir / filename
     out_path.write_bytes(resp.content)
-    print(f"[edgar_fetch] Downloaded: {instance_name}")
+    print(f"[edgar_fetch] Downloaded: {filename}")
+
+    # 4) If it's a ZIP, you might want to unzip and return the inner XML
+    if filename.lower().endswith(".zip"):
+        import zipfile
+        with zipfile.ZipFile(out_path, 'r') as z:
+            # extract the first .xml inside
+            xml_names = [n for n in z.namelist() if n.lower().endswith(".xml")]
+            if not xml_names:
+                return out_path
+            xml_name = xml_names[0]
+            z.extract(xml_name, dest_dir)
+            return dest_dir / xml_name
+
     return out_path
 
 
-def fetch_for_ticker(ticker: str, count: int = 20, form_types: tuple = ("10-K","10-Q")) -> List[Path]:
+def fetch_for_ticker(
+    ticker: str,
+    count: int = 20,
+    form_types: tuple = ("10-K", "10-Q")
+) -> List[Path]:
     """
-    Fetch specified filings for `ticker`, saving index JSON and downloading artifacts.
+    Fetch filings for `ticker`, save locally *and* push index + docs to S3.
     """
     ticker = ticker.upper()
     cik = get_cik_for_ticker(ticker)
     if not cik:
-        raise ValueError(f"Unable to find CIK for ticker {ticker}.")
+        raise ValueError(f"Unknown ticker {ticker}")
 
     out_dir = DATA_ROOT / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    saved = []
+    existing = {p.name for p in out_dir.glob(f"{ticker}-*-index.json")}
+    saved: List[Path] = []
     filings = get_latest_filings(cik, form_types=form_types, count=count)
+
     for f in filings:
         accession = f["accession"]
-        # Download the full EDGAR index.json
-        idx_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.json"
+        idx_name = f"{ticker}-{accession}-index.json"
+        idx_path = out_dir / idx_name
+
+        # Skip if we already have it
+        if idx_name in existing:
+            saved.append(idx_path)
+            continue
+
+        # 1) Download index JSON
+        idx_url = f"https://data.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.json"
         resp = requests.get(idx_url, headers=HEADERS)
         resp.raise_for_status()
         idx_data = resp.json()
 
-        idx_path = out_dir / f"{ticker}-{accession}-index.json"
+        # 2) Save locally
         idx_path.write_text(json.dumps(idx_data, indent=2), encoding="utf-8")
         saved.append(idx_path)
 
-        choose_and_download(cik, accession, str(idx_path), dest_dir=out_dir)
+        # 3) Upload index to S3
+        s3_index_key = f"edgar/{ticker}/{accession}/{idx_name}"
+        _upload_to_s3(idx_path, s3_index_key)
 
-    print(f"[edgar_fetch] Fetched {len(saved)} filings for {ticker} into {out_dir}")
+        # 4) Download the actual filing (XML/HTML/ZIP)
+        doc_path = choose_and_download(cik, accession, str(idx_path), dest_dir=out_dir)
+        if doc_path:
+            # Upload the downloaded document as well
+            s3_doc_key = f"edgar/{ticker}/{accession}/{doc_path.name}"
+            _upload_to_s3(doc_path, s3_doc_key)
+
+    print(f"[edgar_fetch] Fetched {len(saved)} filings for {ticker}")
     return saved

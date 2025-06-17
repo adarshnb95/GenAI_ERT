@@ -47,8 +47,8 @@ A full-stack Python application for automated EDGAR filings ingestion, FAISS-bas
 * **FastAPI Backend**: REST API for ingestion, summarization, and QA endpoints via Uvicorn.
 * **Automation Scripts**:
 
-  * `run_pipeline.py`: Automates EDGAR ingestion & FAISS index builds.
   * `start_app.py`: Launches both FastAPI and Streamlit concurrently.
+  * `check_metrics.py`: Tests for Revenue and Income without using FAISS
 
 ---
 

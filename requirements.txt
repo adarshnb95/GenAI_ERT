@@ -15,3 +15,5 @@ python-dotenv
 newsapi-python
 fire
 PyPDF2
+boto3
+awscli
