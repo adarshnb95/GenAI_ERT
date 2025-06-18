@@ -11,6 +11,9 @@ from ingestion.edgar_fetch import get_latest_filings, choose_and_download, fetch
 from classifier.predict import classify_text
 from api.ask_handlers import ASK_HANDLERS
 from api.utils import extract_tickers_from_text
+from starlette.concurrency import run_in_threadpool
+from functools import partial
+from pydantic import BaseModel
 
 # Summarization placeholder (to be implemented)
 # from summarization.summarize import summarize_text
@@ -34,44 +37,33 @@ class ClassifyRequest(BaseModel):
 
 class AskRequest(BaseModel):
     text: str
+    count: int = 20
+    form_types: List[str] = ["10-K", "10-Q"]
 
 TICKER_YEAR_PATTERN = re.compile(r"\b([A-Za-z]{2,5})\D+?(20\d{2})\b")
 
 @app.post("/ingest")
-async def ingest(req: IngestRequest):
+async def ingest(request: IngestRequest):
+    """
+    Only do the EDGAR download part. Don’t touch FAISS or embeddings here.
+    """
+    ticker = request.ticker.upper()
+    results = await run_in_threadpool(  # if you’re hitting blocking I/O
+        partial(fetch_for_ticker, ticker, count=request.count, form_types=tuple(request.form_types or []))
+    )
+    return {"ingested": [p.name for p in results]}
+
+class BuildIndexRequest(BaseModel):
+    ticker: str
+    reset: bool = False
+
+@app.post("/build_index")
+async def build_index(req: BuildIndexRequest):
     ticker = req.ticker.upper()
-    count  = req.count
-    forms  = tuple(req.form_types) if req.form_types else ("10-K","10-Q")
-
-    # 1) Fetch filings (does dynamic CIK lookup & download)
-    try:
-        index_paths = fetch_for_ticker(ticker, count=count, form_types=forms)
-    except ValueError as e:
-        # e.g. unknown ticker
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ingestion error: {e}")
-
-    # 2) Build/update FAISS index (non-blocking)
-    try:
-        build_faiss_index_for_ticker(ticker, reset=False)
-    except Exception:
-        # log but don’t fail the ingest call
-        print(f"[ingest] could not build FAISS index for {ticker}")
-
-    # 3) Summarize what got saved
-    results = []
-    for idx in index_paths:
-        stem   = Path(idx).stem  # e.g. "PTY-000012345678-index"
-        folder = Path(idx).parent
-        comps  = [p.name for p in folder.iterdir()
-                  if p.name.startswith(stem) and p.name != Path(idx).name]
-        results.append({
-            "index_file": Path(idx).name,
-            "components": comps
-        })
-
-    return {"ingested": results}
+    await run_in_threadpool(
+        partial(build_faiss_index_for_ticker, ticker, reset=req.reset)
+    )
+    return {"status": "index built", "ticker": ticker}
 
 @app.post("/classify")
 async def classify(request: ClassifyRequest):
@@ -95,12 +87,27 @@ YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 
 @app.post("/ask")
 async def ask(req: AskRequest):
+    # 1) Grab the question text
     question = req.text.strip()
-    tickers  = extract_tickers_from_text(question)
-    if not tickers:
-        raise HTTPException(400, "Couldn't identify any known companies.")
 
-    # 3) Dispatch to handlers (they must fetch/index as needed)
+    # 2) Find tickers (your existing logic)
+    tickers = extract_tickers_from_text(question)
+    if not tickers:
+        raise HTTPException(400, "No tickers found")
+
+    # 3) Kick off ingestion and indexing in threads
+    for ticker in tickers:
+        # fetch_for_ticker and build_faiss_index_for_ticker are blocking I/O
+        await run_in_threadpool(
+            partial(fetch_for_ticker, ticker,
+                    count=req.count,
+                    form_types=tuple(req.form_types))
+        )
+        await run_in_threadpool(
+            partial(build_faiss_index_for_ticker, ticker, reset=False)
+        )
+
+    # 4) Now dispatch to your RAG/metrics handlers
     for handler in ASK_HANDLERS:
         if handler.can_handle(question):
             return handler.handle(tickers, question)
