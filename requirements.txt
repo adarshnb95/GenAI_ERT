@@ -17,3 +17,4 @@ fire
 PyPDF2
 boto3
 awscli
+starlette
