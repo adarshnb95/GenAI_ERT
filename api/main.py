@@ -47,11 +47,24 @@ async def ingest(request: IngestRequest):
     """
     Only do the EDGAR download part. Don’t touch FAISS or embeddings here.
     """
-    ticker = request.ticker.upper()
-    results = await run_in_threadpool(  # if you’re hitting blocking I/O
-        partial(fetch_for_ticker, ticker, count=request.count, form_types=tuple(request.form_types or []))
-    )
-    return {"ingested": [p.name for p in results]}
+    try:
+        paths = await run_in_threadpool(
+            fetch_for_ticker,
+            request.ticker,
+            request.count,
+            tuple(request.form_types) if request.form_types else ("10-K", "10-Q")
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    s3_keys = []
+    for path in paths:
+        parts = path.name.split("-", 2)
+        ticker, accession, fname = parts[0], parts[1], parts[2]
+        key = f"edgar/{ticker}/{accession}/{fname}"
+        s3_keys.append(key)
+    
+    return {"ingested_s3_keys": s3_keys}
 
 class BuildIndexRequest(BaseModel):
     ticker: str
