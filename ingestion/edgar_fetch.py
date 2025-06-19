@@ -26,15 +26,13 @@ _S3 = boto3.client(
     aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
     aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
 )
-_BUCKET = os.getenv('EDGAR_S3_BUCKET')
 
-def _upload_to_s3(local_path: Path, s3_key: str) -> None:
-    """Upload a local file to S3 under the given key."""
-    _S3.upload_file(
-        Filename=str(local_path),
-        Bucket=_BUCKET,
-        Key=s3_key
-    )
+def _upload_to_s3(local_path: Path, s3_key: str):
+    """Helper: push a local file up to S3 under the given key."""
+    bucket = os.getenv("EDGAR_S3_BUCKET")
+    if not bucket:
+        raise RuntimeError("EDGAR_S3_BUCKET environment variable is not set")
+    _S3.upload_file(Filename=str(local_path), Bucket=bucket, Key=s3_key)
 
 def get_cik_for_ticker(ticker: str) -> Optional[str]:
     """
@@ -166,31 +164,39 @@ def fetch_for_ticker(
         idx_name = f"{ticker}-{accession}-index.json"
         idx_path = out_dir / idx_name
 
-        # Skip if we already have it
+        # Skip if we already have it locally
         if idx_name in existing:
             saved.append(idx_path)
+            # Even if it's cached locally, push to S3
+            s3_index_key = f"edgar/{ticker}/{accession}/{idx_name}"
+            _upload_to_s3(idx_path, s3_index_key)
             continue
 
         # 1) Download index JSON
-        idx_url = f"https://data.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.json"
+        idx_url = (
+            f"https://data.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.json"
+        )
         resp = requests.get(idx_url, headers=HEADERS)
         resp.raise_for_status()
         idx_data = resp.json()
 
-        # 2) Save locally
+        # 2) Save index locally
         idx_path.write_text(json.dumps(idx_data, indent=2), encoding="utf-8")
         saved.append(idx_path)
 
-        # 3) Upload index to S3
-        s3_index_key = f"edgar/{ticker}/{accession}/{idx_name}"
+        # 3) Upload index JSON to S3
+        s3_index_key = f"edgar/{ticker}/{accession}/{idx_path.name}"
         _upload_to_s3(idx_path, s3_index_key)
 
-        # 4) Download the actual filing (XML/HTML/ZIP)
-        doc_path = choose_and_download(cik, accession, str(idx_path), dest_dir=out_dir)
-        if doc_path:
-            # Upload the downloaded document as well
-            s3_doc_key = f"edgar/{ticker}/{accession}/{doc_path.name}"
-            _upload_to_s3(doc_path, s3_doc_key)
+        # 4) Download primary component (XML/HTML/etc.)
+        comp = choose_and_download(cik, accession, str(idx_path), dest_dir=out_dir)
+        if comp:
+            comp_path = Path(comp)
+            saved.append(comp_path)
+
+            # 5) Upload component to S3
+            s3_comp_key = f"edgar/{ticker}/{accession}/{comp_path.name}"
+            _upload_to_s3(comp_path, s3_comp_key)
 
     print(f"[edgar_fetch] Fetched {len(saved)} filings for {ticker}")
     return saved
