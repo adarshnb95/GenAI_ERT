@@ -11,18 +11,28 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def stub_fetch_and_env(monkeypatch, tmp_path):
-    # … existing monkeypatches …
+    """
+    Stub out fetch_for_ticker to avoid network calls,
+    and set AWS env so no runtime error.
+    """
+    # Monkeypatch environment for S3 bucket
+    monkeypatch.setenv('EDGAR_S3_BUCKET', 'test-bucket')
+    monkeypatch.setenv('AWS_REGION', 'us-east-1')
 
-    # Stub out the actual S3 upload so we never call boto3 here
-    monkeypatch.setattr(ef, '_upload_to_s3', lambda *args, **kwargs: None)
-
-    # Stub fetch_for_ticker itself
+    # Stub fetch_for_ticker to return dummy local Paths
     dummy_index = tmp_path / 'AAPL-0001-index.json'
     dummy_index.write_text('{}')
     dummy_xml = tmp_path / 'AAPL-0001.xml'
     dummy_xml.write_text('<xbrl/>')
+        # Stub fetch_for_ticker in the ingestion module (used by dashboard/internal logic)
     monkeypatch.setattr(
         ef, 'fetch_for_ticker',
+        lambda ticker, count, form_types: [dummy_index, dummy_xml]
+    )
+    # Also stub fetch_for_ticker in the API handler module
+    import api.main as am
+    monkeypatch.setattr(
+        am, 'fetch_for_ticker',
         lambda ticker, count, form_types: [dummy_index, dummy_xml]
     )
     yield

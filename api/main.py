@@ -59,10 +59,18 @@ async def ingest(request: IngestRequest):
     
     s3_keys = []
     for path in paths:
-        parts = path.name.split("-", 2)
-        ticker, accession, fname = parts[0], parts[1], parts[2]
-        key = f"edgar/{ticker}/{accession}/{fname}"
-        s3_keys.append(key)
+        name = path.name                     # e.g. "AAPL-0001-index.json" or "AAPL-0001.xml"
+        ticker, rest = name.split("-", 1)    # ticker="AAPL", rest="0001-index.json" or "0001.xml"
+
+        if rest.startswith("0000") or "-" in rest:
+            # This covers the index.json case ("0001-index.json")
+            accession, fname = rest.split("-", 1)
+        else:
+            # This covers the simple XML case ("0001.xml")
+            accession = rest.split(".", 1)[0]  # "0001"
+            fname = name                       # full filename
+
+        s3_keys.append(f"edgar/{ticker}/{accession}/{fname}")
     
     return {"ingested_s3_keys": s3_keys}
 
