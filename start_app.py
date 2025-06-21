@@ -37,7 +37,7 @@ def main():
 
     # 2) Wait for FastAPI to be ready
     print(f"🔎 Waiting up to 30s for backend at {UVICORN_HOST}:{UVICORN_PORT}…")
-    if not wait_for_backend(UVICORN_HOST, UVICORN_PORT, timeout=60):
+    if not wait_for_backend(UVICORN_HOST, UVICORN_PORT, timeout=120):
         print("❌ Backend did not appear in time; exiting.")
         uvicorn_proc.terminate()
         sys.exit(1)
