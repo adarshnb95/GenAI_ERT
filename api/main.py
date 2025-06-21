@@ -42,6 +42,13 @@ class AskRequest(BaseModel):
 
 TICKER_YEAR_PATTERN = re.compile(r"\b([A-Za-z]{2,5})\D+?(20\d{2})\b")
 
+from api.ask_handlers import SimpleRevenueHandler, SimpleMetricHandler
+SIMPLE_HANDLERS = [
+    SimpleRevenueHandler(),
+    SimpleMetricHandler(),
+    # …any other lightweight handlers…
+]
+
 @app.post("/ingest")
 async def ingest(request: IngestRequest):
     """
@@ -106,35 +113,40 @@ async def summarize(request: ClassifyRequest):
 YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 
 
+
 @app.post("/ask")
 async def ask(req: AskRequest):
-    # 1) Grab the question text
+    # 1) Grab the question
     question = req.text.strip()
 
-    # 2) Find tickers (your existing logic)
+    # 2) Extract tickers
     tickers = extract_tickers_from_text(question)
     if not tickers:
-        raise HTTPException(400, "No tickers found")
+        raise HTTPException(status_code=400, detail="No tickers found")
 
-    # 3) Kick off ingestion and indexing in threads
+    # 3) Try simple handlers first (no ingestion/indexing)
+    for handler in SIMPLE_HANDLERS:
+        if handler.can_handle(question):
+            return handler.handle(tickers, question)
+
+    # 4) Otherwise spin up ingestion + indexing
     for ticker in tickers:
-        # fetch_for_ticker and build_faiss_index_for_ticker are blocking I/O
         await run_in_threadpool(
-            partial(fetch_for_ticker, ticker,
+            partial(fetch_for_ticker,
+                    ticker,
                     count=req.count,
-                    form_types=tuple(req.form_types))
+                    form_types=tuple(req.form_types) if req.form_types else ("10-K","10-Q"))
         )
         await run_in_threadpool(
             partial(build_faiss_index_for_ticker, ticker, reset=False)
         )
 
-    # 4) Now dispatch to your RAG/metrics handlers
+    # 5) Now dispatch to your full set of handlers (including RAG fallbacks)
     for handler in ASK_HANDLERS:
         if handler.can_handle(question):
             return handler.handle(tickers, question)
 
-    raise HTTPException(500, "No handler could process the question.")
-
+    raise HTTPException(status_code=500, detail="No handler could process the question.")
 
 if __name__ == "__main__":
     uvicorn.run("api.main:app", host="127.0.0.1", port=8000, reload=True)
