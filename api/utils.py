@@ -3,7 +3,12 @@ import os
 import re
 import openai
 import requests
-from typing import List, Optional
+from typing import List, Optional, Dict
+import json
+from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Configure OpenAI key
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -11,6 +16,23 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 # Yahoo Finance search endpoint for dynamic ticker lookup
 SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 
+COMPANY_MAP_PATH = Path(__file__).parent.parent / "company_map.json"
+
+def load_company_map() -> Dict[str, str]:
+    if COMPANY_MAP_PATH.exists():
+        with open(COMPANY_MAP_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_company_map(m: Dict[str, str]) -> None:
+    with open(COMPANY_MAP_PATH, "w", encoding="utf-8") as f:
+        json.dump(m, f, indent=2, ensure_ascii=False)
+
+def add_company_mapping(name: str, ticker: str) -> None:
+    """Register a new company-name→ticker mapping."""
+    m = load_company_map()
+    m[name] = ticker
+    save_company_map(m)
 
 def lookup_ticker(company_name: str) -> Optional[str]:
     """
@@ -59,36 +81,48 @@ def extract_company_names(text: str) -> List[str]:
 
 
 def extract_tickers_from_text(text: str) -> List[str]:
-    # 1) Try finding uppercase tokens 2–5 letters that Yahoo recognizes
-    raw_candidates = re.findall(r"\b[A-Z]{2,4}\b", text)
+    m = load_company_map()
     tickers = []
-    for tok in raw_candidates:
-        # 2) Confirm that Yahoo (or SEC CIK map) agrees it's a real symbol
-        resolved = lookup_ticker(tok)
-        if resolved and resolved.upper() == tok and tok not in tickers:
+
+    # 1) name‐based lookup (handles “Apple” or “Apple’s”)
+    for name, symbol in m.items():
+        if re.search(rf"\b{name}(?:'s)?\b", text, flags=re.IGNORECASE):
+            tickers.append(symbol)
+
+    # 2) uppercase token check (AAPL, MSFT…)
+    for tok in re.findall(r"\b[A-Z]{{2,5}}\b", text):
+        if tok not in tickers and lookup_ticker(tok):
             tickers.append(tok)
 
     if tickers:
+        logger.debug(f"[tickers] via rules → {tickers} for text {text!r}")
         return tickers
 
-    # GPT fallback
+    # 3) GPT fallback
     prompt = (
         "List all stock ticker symbols mentioned in this question, comma-separated, "
-        "with nothing else. If you see none, say NONE.\n\n"
+        "with nothing else. If none, respond NONE.\n\n"
         f"{text}"
     )
     resp = openai.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role":"system","content":"You are a helpful assistant that only outputs ticker symbols."},
-            {"role":"user","content":prompt}
+            {"role": "system", "content": "You only output ticker symbols."},
+            {"role": "user",   "content": prompt}
         ],
-        temperature=0.0,
-        max_tokens=30
+        temperature=0
     )
-    content = resp.choices[0].message.content.strip()
-    # Split on commas, strip, uppercase
-    symbols = [s.strip().upper() for s in content.split(",") if s.strip()]
-    # *** Filter out any “NONE” or non-alphanumeric tokens ***
-    symbols = [s for s in symbols if s.isalpha() and s.upper() != "NONE"]
-    return symbols
+    symbols = [s.strip().upper() for s in resp.choices[0].message.content.split(",")]
+    logger.debug(f"[tickers] via GPT → {symbols} for text {text!r}")
+
+    # **If** GPT gave us a ticker, but we also detect a *new* company name in the text, record it:
+    if symbols and symbols != ["NONE"]:
+        # cheap heuristic: grab the first capitalized word sequence
+        name_match = re.search(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b", text)
+        if name_match:
+            candidate_name = name_match.group(1)
+            # only save if truly new
+            if candidate_name not in m:
+                add_company_mapping(candidate_name, symbols[0])
+
+    return [s for s in symbols if s != "NONE"]

@@ -11,36 +11,116 @@ from summarization.summarize import (
     answer_question_for_ticker,
 )
 from summarization.extract_metrics import (
-    get_revenue_by_year,
-    get_net_income_by_year,
+    get_net_income_by_year, 
+    get_metric_for_year,
 )
 from summarization.news_index import retrieve_news_context
+import datetime
 
 class AskHandler:
     def can_handle(self, text: str) -> bool: ...
     def handle(self, tickers: List[str], text: str) -> dict: ...
 
-class SimpleMetricHandler(AskHandler):
-    """Handles 'What was X revenue/net income in the year YYYY?'"""
-    METRIC_FUNCS = {
-        "revenue": get_revenue_by_year,
-        "net income": get_net_income_by_year,
+
+DOCS_DIR = Path(__file__).parent.parent / "ingestion" / "data"
+
+class SimpleMetricHandler:
+    """Handles “What was X revenue/net income in the year YYYY?”"""
+
+    # our controlled mapping of question → XBRL tags (in preference order)
+    METRIC_TAGS = {
+        "revenue": ["SalesRevenueNet", "Revenues"],
+        "net income": ["NetIncomeLoss"],
     }
-    def can_handle(self, text: str) -> bool:
+
+    @staticmethod
+    def can_handle(text: str) -> bool:
         txt = text.lower()
-        return "in the year" in txt and any(m in txt for m in self.METRIC_FUNCS)
-    def handle(self, tickers, text):
-        m = re.search(r"in the year (\d{4})", text)
+        return (
+            "in the year" in txt
+            and any(k in txt for k in SimpleMetricHandler.METRIC_TAGS)
+        )
+
+    @staticmethod
+    def handle(tickers: List[str], text: str) -> dict:
+        # 1) extract year
+        m = re.search(r"in the year (\d{4})", text, re.IGNORECASE)
         if not m:
-            raise HTTPException(400, "Year not found.")
+            raise HTTPException(400, "Couldn't find a year in your question.")
         year = int(m.group(1))
-        metric = next(m for m in self.METRIC_FUNCS if m in text.lower())
-        fn = self.METRIC_FUNCS[metric]
+        year_str = str(year)
+
+        # 2) figure out which metric key they mentioned
+        metric_key = next(
+            k for k in SimpleMetricHandler.METRIC_TAGS if k in text.lower()
+        )
+        tags = SimpleMetricHandler.METRIC_TAGS[metric_key]
+
+        # 3) ensure a 10-K for that year is present
+        for t in tickers:
+            ticker_dir = DOCS_DIR / t
+            has_year = any(year_str in f.name for f in ticker_dir.glob("*.xml"))
+            if not has_year:
+                # fetch just enough 10-Ks to cover back to that year
+                current_year = datetime.date.today().year
+                years_back = current_year - year + 1
+                fetch_for_ticker(t, count=years_back, form_types=("10-K",))
+
+        # 4) now actually pull the metric
         parts = []
         for t in tickers:
-            v = fn(t, year)
-            parts.append(f"{t}: ${v:,}" if v else f"{t}: N/A")
+            val = None
+            for tag in tags:
+                val = get_metric_for_year(t, year, tag)
+                if val is not None:
+                    break
+            if val is not None:
+                parts.append(f"{t}: ${val:,}")
+            else:
+                parts.append(f"{t}: data not available for {year}")
+
         return {"answer": "; ".join(parts)}
+
+# Strict revenue handler that only works for revenue questions
+# (commented out for now, as it duplicates SimpleMetricHandler)
+# class SimpleRevenueHandler(AskHandler):
+#     """
+#     Handles questions like "What was AAPL revenue in the year 2020?"
+#     entirely via XBRL parsing—no FAISS or LLM required.
+#     """
+#     @staticmethod
+#     def can_handle(text: str) -> bool:
+#         # Match “what was/is <anything> revenue in the year YYYY”
+#         return bool(
+#             re.search(
+#                 r"\bwhat (?:was|is) .+? revenue .* in the year \d{4}",
+#                 text,
+#                 re.IGNORECASE
+#             )
+#         )
+
+#     @staticmethod
+#     def handle(tickers: List[str], text: str) -> dict:
+#         # 1) Extract the year
+#         match = re.search(r"in the year (\d{4})", text, re.IGNORECASE)
+#         if not match:
+#             raise HTTPException(status_code=400, detail="Couldn't find a 4-digit year in your question.")
+#         year = match.group(1)
+
+#         # 2) Query each ticker’s XBRL for that year
+#         results = {}
+#         for t in tickers:
+#             rev = get_revenue_by_year(t, year)
+#             results[t] = rev if rev is not None else None
+
+#         # 3) Format the answer
+#         parts = []
+#         for t, rev in results.items():
+#             if rev is not None:
+#                 parts.append(f"{t}: ${int(rev):,}")
+#             else:
+#                 parts.append(f"{t}: data not available for {year}")
+#         return {"answer": "; ".join(parts)}
 
 class CompareHandler(AskHandler):
     """Handles comparisons like 'When did AAPL have more net income than MSFT?'"""
@@ -71,7 +151,7 @@ class NewsHandler(AskHandler):
             prompt = (
                 f"You are an equity research assistant. {t}'s recent news:\n{joined}\n\nQuestion: {text}"
             )
-            resp = openai.ChatCompletion.create(
+            resp = openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role":"system","content":"You summarize finance news."},
@@ -101,7 +181,7 @@ class FormN2Handler(AskHandler):
         build_faiss_index_for_ticker(t, reset=True)
         raw = Path(files[0].parent / files[0].with_suffix(".xml").name).read_text(errors="ignore")
         # few-shot prompt omitted for brevity…
-        content = openai.ChatCompletion.create(
+        content = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[  # your few-shot
                 {"role":"system","content":"Extract exactly JSON."},
