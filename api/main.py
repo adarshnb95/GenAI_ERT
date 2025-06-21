@@ -14,9 +14,16 @@ from api.utils import extract_tickers_from_text
 from starlette.concurrency import run_in_threadpool
 from functools import partial
 from pydantic import BaseModel
+import logging
 
 # Summarization placeholder (to be implemented)
 # from summarization.summarize import summarize_text
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s %(name)s – %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Generative AI Equity Research Tool API",
@@ -42,9 +49,9 @@ class AskRequest(BaseModel):
 
 TICKER_YEAR_PATTERN = re.compile(r"\b([A-Za-z]{2,5})\D+?(20\d{2})\b")
 
-from api.ask_handlers import SimpleRevenueHandler, SimpleMetricHandler
+from api.ask_handlers import SimpleMetricHandler
 SIMPLE_HANDLERS = [
-    SimpleRevenueHandler(),
+    # SimpleRevenueHandler(),
     SimpleMetricHandler(),
     # …any other lightweight handlers…
 ]
@@ -118,11 +125,15 @@ YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 async def ask(req: AskRequest):
     # 1) Grab the question
     question = req.text.strip()
+    logger.info(f"Incoming question: “{question}”")
 
     # 2) Extract tickers
     tickers = extract_tickers_from_text(question)
+    logger.info(f"[ask] Question: {question!r} → detected tickers: {tickers}")
+
+    
     if not tickers:
-        raise HTTPException(status_code=400, detail="No tickers found")
+        raise HTTPException(400, "No tickers found")
 
     # 3) Try simple handlers first (no ingestion/indexing)
     for handler in SIMPLE_HANDLERS:
