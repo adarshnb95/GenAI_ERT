@@ -13,7 +13,7 @@ A full-stack Python application for automated EDGAR filings ingestion, FAISS-bas
 ## Table of Contents
 
 1. [Features](#features)
-2. [Folder Structure](#folder-structure)
+2. [Folder and Design Structure](#folder-structure)
 3. [Prerequisites & Installation](#prerequisites--installation)
 4. [Environment Variables](#environment-variables)
 5. [Usage](#usage)
@@ -85,6 +85,10 @@ GenAI_ERT/
 ├── requirements.txt
 └── .gitignore
 ```
+System design diagram:
+
+![system_design_diagram](https://github.com/adarshnb95/GenAI_ERT/design/design_diagram.png System Design Diagram)
+
 
 ---
 
