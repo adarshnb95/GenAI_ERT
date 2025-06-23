@@ -87,7 +87,7 @@ GenAI_ERT/
 ```
 System design diagram:
 
-![system_design_diagram](https://github.com/adarshnb95/GenAI_ERT/design/design_diagram.png System Design Diagram)
+![System_design_diagram](https://github.com/adarshnb95/GenAI_ERT/blob/main/design/design_diagram.png System Design Diagram)
 
 
 ---
