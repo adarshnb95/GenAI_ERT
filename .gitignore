@@ -60,3 +60,4 @@ classifier/checkpoint-*/
 
 # Summarized faiss index
 summarization/faiss_index/
+summarization/news_faiss/
