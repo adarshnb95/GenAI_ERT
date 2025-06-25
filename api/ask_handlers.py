@@ -21,6 +21,13 @@ class AskHandler:
     def can_handle(self, text: str) -> bool: ...
     def handle(self, tickers: List[str], text: str) -> dict: ...
 
+import logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s %(name)s – %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 
 DOCS_DIR = Path(__file__).parent.parent / "ingestion" / "data"
 
@@ -43,6 +50,7 @@ class SimpleMetricHandler:
 
     @staticmethod
     def handle(tickers: List[str], text: str) -> dict:
+        logger.info(f"[SimpleMetricHandler] Handling: {text} for {tickers}")
         # 1) extract year
         m = re.search(r"in the year (\d{4})", text, re.IGNORECASE)
         if not m:
