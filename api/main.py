@@ -125,19 +125,21 @@ YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 async def ask(req: AskRequest):
     # 1) Grab the question
     question = req.text.strip()
-    logger.info(f"Incoming question: “{question}”")
+    # logger.info(f"Incoming question: “{question}”")
 
     # 2) Extract tickers
     tickers = extract_tickers_from_text(question)
-    logger.info(f"[ask] Question: {question!r} → detected tickers: {tickers}")
+    # logger.info(f"[ask] Question: {question!r} → detected tickers: {tickers}")
 
     
     if not tickers:
         raise HTTPException(400, "No tickers found")
 
     # 3) Try simple handlers first (no ingestion/indexing)
+    logger.info("Checking if question can be handled by SimpleMetricHandler...")
     for handler in SIMPLE_HANDLERS:
-        if handler.can_handle(question):
+        if isinstance(handler, SimpleMetricHandler) and handler.can_handle(question):
+            
             return handler.handle(tickers, question)
 
     # 4) Otherwise spin up ingestion + indexing
