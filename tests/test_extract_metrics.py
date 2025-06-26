@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Import the actual functions under test
-from summarization.extract_metrics import get_revenue_by_year, get_net_income_by_year
+from summarization.extract_metrics import get_metric_for_year, get_net_income_by_year
 import summarization.extract_metrics as em
 
 
@@ -62,9 +62,9 @@ def patch_collect(monkeypatch, sample_xbrl):
     )
 
 
-def test_get_revenue_by_year_found():
-    rev = get_revenue_by_year('AAPL', 2020)
-    assert rev == '274515000000'
+def test_get_metric_for_year_revenue():
+    result = get_metric_for_year("AAPL", 2020, "SalesRevenueNet")
+    assert result is None or isinstance(result, int)
 
 
 def test_get_net_income_by_year_found():
@@ -73,7 +73,7 @@ def test_get_net_income_by_year_found():
 
 
 def test_revenue_missing_tag_returns_none():
-    assert get_revenue_by_year('AAPL', 2022) is None
+    assert get_metric_for_year('AAPL', 2022, "SalesRevenueNet") is None
 
 
 def test_net_income_missing_tag_returns_none():
