@@ -4,6 +4,13 @@ import requests
 from pathlib import Path
 from typing import List, Optional
 import boto3
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s – %(message)s",
+)  
+logger = logging.getLogger(__name__)
 
 # SEC company tickers JSON for dynamic CIK lookup
 CIK_JSON_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -159,6 +166,8 @@ def fetch_for_ticker(
     saved: List[Path] = []
     filings = get_latest_filings(cik, form_types=form_types, count=count)
 
+    logger.info(f"Fetched {len(filings)} filings. Dates:")
+
     for f in filings:
         accession = f["accession"]
         idx_name = f"{ticker}-{accession}-index.json"
@@ -197,6 +206,8 @@ def fetch_for_ticker(
             # 5) Upload component to S3
             s3_comp_key = f"edgar/{ticker}/{accession}/{comp_path.name}"
             _upload_to_s3(comp_path, s3_comp_key)
+        
+        logger.info(f"{f['filingDate']} - {f['formType']} - {f['accessionNumber']}")
 
     print(f"[edgar_fetch] Fetched {len(saved)} filings for {ticker}")
     return saved

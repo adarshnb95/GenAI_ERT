@@ -2,8 +2,8 @@ from transformers import DistilBertForSequenceClassification, DistilBertTokenize
 import torch
 
 # Load your trained model & tokenizer
-model = DistilBertForSequenceClassification.from_pretrained("classifier/checkpoint")
-tokenizer = DistilBertTokenizerFast.from_pretrained("classifier/checkpoint")
+model = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased")
+tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
 
 # Prepare a sample input
 text = "In Q2, revenue rose by 15% year-over-year thanks to strong product sales."
