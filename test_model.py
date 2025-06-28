@@ -2,7 +2,9 @@ from transformers import DistilBertForSequenceClassification, DistilBertTokenize
 import torch
 
 # Load your trained model & tokenizer
-model = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased")
+model = DistilBertForSequenceClassification.from_pretrained(
+    "./models/classifier-checkpoint"
+)
 tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
 
 # Prepare a sample input
