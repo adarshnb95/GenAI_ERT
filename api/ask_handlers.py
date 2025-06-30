@@ -31,10 +31,12 @@ logger = logging.getLogger(__name__)
 
 DOCS_DIR = Path(__file__).parent.parent / "ingestion" / "data"
 
-class SimpleMetricHandler:
-    """Handles “What was X revenue/net income in the year YYYY?”"""
-
-    # our controlled mapping of question → XBRL tags (in preference order)
+class SimpleMetricHandler(AskHandler):
+    """
+    Handles questions like:
+      “What was AAPL revenue in the year 2020?”
+      “What was MSFT net income in the year 2019?”
+    """
     METRIC_TAGS = {
         "revenue": ["SalesRevenueNet", "Revenues"],
         "net income": ["NetIncomeLoss"],
@@ -44,48 +46,50 @@ class SimpleMetricHandler:
     def can_handle(text: str) -> bool:
         txt = text.lower()
         return (
-            "in the year" in txt
-            and any(k in txt for k in SimpleMetricHandler.METRIC_TAGS)
+            "in the year" in txt and
+            any(metric in txt for metric in SimpleMetricHandler.METRIC_TAGS)
         )
 
-    @staticmethod
-    def handle(tickers: List[str], text: str) -> dict:
-        logger.info(f"[SimpleMetricHandler] Handling: {text} for {tickers}")
-        # 1) extract year
+    def handle(self, tickers: List[str], text: str) -> dict:
+        # 1) extract the year
         m = re.search(r"in the year (\d{4})", text, re.IGNORECASE)
         if not m:
             raise HTTPException(400, "Couldn't find a year in your question.")
         year = int(m.group(1))
-        year_str = str(year)
 
-        # 2) figure out which metric key they mentioned
+        # 2) figure out which metric they want
         metric_key = next(
-            k for k in SimpleMetricHandler.METRIC_TAGS if k in text.lower()
+            (met for met in self.METRIC_TAGS if met in text.lower()),
+            None
         )
-        tags = SimpleMetricHandler.METRIC_TAGS[metric_key]
+        if metric_key is None:
+            raise HTTPException(400, "Couldn't identify which metric you want.")
 
-        # 3) ensure a 10-K for that year is present
+        # 3) fetch exactly that many 10-K filings so the requested year is included
+        current_year = datetime.date.today().year
+        years_back   = current_year - year + 1
         for t in tickers:
-            ticker_dir = DOCS_DIR / t
-            has_year = any(year_str in f.name for f in ticker_dir.glob("*.xml"))
-            if not has_year:
-                # fetch just enough 10-Ks to cover back to that year
-                current_year = datetime.date.today().year
-                years_back = current_year - year + 1
-                fetch_for_ticker(t, count=years_back, form_types=("10-K",))
+            # this will download up to `years_back` 10-Ks, 
+            # so that there _will_ be one for `year` if it exists
+            fetch_for_ticker(
+                t,
+                count=years_back,
+                form_types=("10-K",),
+            )
 
-        # 4) now actually pull the metric
+        # 4) now pull the metric out of whichever XBRL we have for that year
         parts = []
         for t in tickers:
             val = None
-            for tag in tags:
+            for tag in self.METRIC_TAGS[metric_key]:
                 val = get_metric_for_year(t, year, tag)
                 if val is not None:
                     break
+
             if val is not None:
                 parts.append(f"{t}: ${val:,}")
             else:
-                parts.append(f"{t}: data not available for {year}")
+                parts.append(f"{t} {metric_key} data not found for {year}")
 
         return {"answer": "; ".join(parts)}
 
