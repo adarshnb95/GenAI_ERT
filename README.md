@@ -207,41 +207,6 @@ python start_app.py
 
 ---
 
-## 5-Day Development Plan
-
-**Day 1: Automate Ingestion & Indexing** (Completed)
-
-* Finalize `run_pipeline.py`, test end-to-end
-* Commit automation script and verify folder outputs
-
-**Day 2: Parameterize by Ticker** (Completed)
-
-* Refactor `ingestion/edgar_fetch.py`, `summarization/summarize.py` to accept ticker
-* Verify `fetch_for_ticker("AAPL")` writes to `ingestion/data/AAPL/`
-* Verify `build_faiss_index_for_ticker("AAPL", reset=True)` creates FAISS index
-
-**Day 3: Unified Startup & UI Ticker Input** (Completed)
-
-* Create `start_app.py` to launch both services
-* Update Streamlit (`dashboard_app.py`) to include ticker input
-* Adapt FastAPI `/ask` to consume `ticker` from request
-
- feature/api
-**Day 4: Handler-Based Routing & Tests** (Completed)
-
-* Implement `api/ask_handlers.py` with modular handlers
-* Refactor `/ask` in `api/main.py` to loop through `ASK_HANDLERS`
-* Write unit tests for each handler with TestClient
-
-**Day 5: Performance & Polish** (Pending)
-
-* Lazy-load heavy models and FAISS imports
-* Switch to Uvicorn factory mode and limit reload dirs
-* Add end-to-end smoke tests (`tests/test_e2e.py`)
-* Update README, finalize documentation
-
----
-
 ## Adding New Question Types
 
 To add a new handler (e.g. EBITDA comparison):
