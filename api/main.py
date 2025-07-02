@@ -119,47 +119,34 @@ async def summarize(request: ClassifyRequest):
 
 YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 
-
-
 @app.post("/ask")
 async def ask(req: AskRequest):
-    # 1) Grab the question
     question = req.text.strip()
-    # logger.info(f"Incoming question: “{question}”")
-
-    # 2) Extract tickers
+    # 1) detect tickers
     tickers = extract_tickers_from_text(question)
-    # logger.info(f"[ask] Question: {question!r} → detected tickers: {tickers}")
-
-    
     if not tickers:
-        raise HTTPException(400, "No tickers found")
+        raise HTTPException(400, "No tickers found in your question.")
 
-    # 3) Try simple handlers first (no ingestion/indexing)
-    logger.info("Checking if question can be handled by SimpleMetricHandler...")
-    for handler in SIMPLE_HANDLERS:
-        if isinstance(handler, SimpleMetricHandler) and handler.can_handle(question):
-            
-            return handler.handle(tickers, question)
+    # 2) Simple‐metric questions go straight to SimpleMetricHandler
+    if SimpleMetricHandler.can_handle(question):
+        handler = SimpleMetricHandler()
+        return handler.handle(tickers, question)
 
-    # 4) Otherwise spin up ingestion + indexing
+    # 3) Otherwise kick off ingestion/indexing in background threads
     for ticker in tickers:
         await run_in_threadpool(
-            partial(fetch_for_ticker,
-                    ticker,
-                    count=req.count,
-                    form_types=tuple(req.form_types) if req.form_types else ("10-K","10-Q"))
+            partial(fetch_for_ticker, ticker, count=req.count, form_types=tuple(req.form_types))
         )
         await run_in_threadpool(
             partial(build_faiss_index_for_ticker, ticker, reset=False)
         )
 
-    # 5) Now dispatch to your full set of handlers (including RAG fallbacks)
+    # 4) Now try the rest of your handlers (including classifier/RAG fallback)
     for handler in ASK_HANDLERS:
         if handler.can_handle(question):
             return handler.handle(tickers, question)
 
-    raise HTTPException(status_code=500, detail="No handler could process the question.")
+    raise HTTPException(500, "Unable to handle the question.")
 
 if __name__ == "__main__":
     uvicorn.run("api.main:app", host="127.0.0.1", port=8000, reload=True)
