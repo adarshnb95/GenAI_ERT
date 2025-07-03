@@ -122,15 +122,18 @@ YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 @app.post("/ask")
 async def ask(req: AskRequest):
     question = req.text.strip()
+    logger.info(f"[ask] incoming question: {question!r}")
+
     # 1) detect tickers
     tickers = extract_tickers_from_text(question)
     if not tickers:
         raise HTTPException(400, "No tickers found in your question.")
+    logger.info(f"[ask] detected tickers: {tickers}")
 
-    # 2) Simple‐metric questions go straight to SimpleMetricHandler
+    # 2) short-circuit simple year-metric questions
     if SimpleMetricHandler.can_handle(question):
-        handler = SimpleMetricHandler()
-        return handler.handle(tickers, question)
+        logger.info("[ask] matched SimpleMetricHandler — skipping FAISS/classifier.")
+        return SimpleMetricHandler.handle(tickers, question)
 
     # 3) Otherwise kick off ingestion/indexing in background threads
     for ticker in tickers:
@@ -144,6 +147,7 @@ async def ask(req: AskRequest):
     # 4) Now try the rest of your handlers (including classifier/RAG fallback)
     for handler in ASK_HANDLERS:
         if handler.can_handle(question):
+            logger.info(f"[ask] dispatching to {handler.__class__.__name__}")
             return handler.handle(tickers, question)
 
     raise HTTPException(500, "Unable to handle the question.")
