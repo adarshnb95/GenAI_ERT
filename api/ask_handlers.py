@@ -22,6 +22,8 @@ METRIC_TAGS = {
     "net income":     ["NetIncomeLoss"],
     # add a bare "income" alias if you want "income" to match too:
     "income":         ["NetIncomeLoss"],
+    "sales":          ["SalesRevenueNet"]
+    "profit":         ["NetIncomeGain"]
 }
 
 class AskHandler:
