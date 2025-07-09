@@ -5,14 +5,14 @@ from pathlib import Path
 from fastapi import HTTPException
 from typing import List
 
-from ingestion.edgar_fetch import fetch_for_ticker
+from ingestion.edgar_fetch import fetch_for_ticker, fetch_xbrl_for_year
 from summarization.summarize import (
     build_faiss_index_for_ticker,
     answer_question_for_ticker,
 )
 from summarization.extract_metrics import (
     get_net_income_by_year, 
-    get_metric_for_year,
+    parse_xbrl_metric,
 )
 from summarization.news_index import retrieve_news_context
 import datetime
@@ -38,48 +38,55 @@ logger = logging.getLogger(__name__)
 
 DOCS_DIR = Path(__file__).parent.parent / "ingestion" / "data"
 
-class SimpleMetricHandler:
+class SimpleMetricHandler(AskHandler):
+    METRIC_TAGS = {
+        "revenue": ["SalesRevenueNet","Revenues"],
+        "net income": ["NetIncomeLoss"],
+        # add more as needed…
+    }
+
     @staticmethod
     def can_handle(text: str) -> bool:
         txt = text.lower()
-        # must have "in the year YYYY" + one of the metric keywords
         return (
-            re.search(r"in the (?:year )?(\d{4})", txt)
-            and any(metric in txt for metric in METRIC_TAGS)
+            "in the year" in txt
+            and any(m in txt for m in SimpleMetricHandler.METRIC_TAGS)
         )
 
     @staticmethod
     def handle(tickers: List[str], text: str) -> dict:
-        # 1) extract year
-        m = re.search(r"in the (?:year )?(\d{4})", text, re.IGNORECASE)
+        # extract year
+        m = re.search(r"in the year (\d{4})", text, re.IGNORECASE)
         if not m:
             raise HTTPException(400, "Couldn't find a year in your question.")
         year = int(m.group(1))
 
-        # 2) figure out which metric they mentioned
-        lower = text.lower()
+        # pick which metric
         metric_key = next(
-            (metric for metric in METRIC_TAGS if metric in lower),
+            (m for m in SimpleMetricHandler.METRIC_TAGS if m in text.lower()),
             None
         )
-        if metric_key is None:
+        if not metric_key:
             raise HTTPException(400, "Couldn't identify which metric you want.")
 
-        # 3) fetch value for each ticker
-        parts = []
+        tags = SimpleMetricHandler.METRIC_TAGS[metric_key]
+        answers = []
+
         for t in tickers:
-            val = None
-            for tag in METRIC_TAGS[metric_key]:
-                val = get_metric_for_year(t, year, tag)
-                if val is not None:
-                    break
+            # 1) grab the 10-K XBRL for that year
+            xml_file = fetch_xbrl_for_year(t, year, form_type="10-K")
+            if not xml_file:
+                answers.append(f"{t} {metric_key} data not found for {year}")
+                continue
 
-            if val is not None:
-                parts.append(f"{t} {metric_key} in {year}: ${val:,}")
+            # 2) parse it
+            val = parse_xbrl_metric(xml_file, tags)
+            if val is None:
+                answers.append(f"{t} {metric_key} data not found in XBRL for {year}")
             else:
-                parts.append(f"{t} {metric_key} data not found for {year}")
+                answers.append(f"{t} {metric_key} in {year}: ${val:,}")
 
-        return {"answer": "; ".join(parts)}
+        return {"answer": "; ".join(answers)}
 
 # Strict revenue handler that only works for revenue questions
 # (commented out for now, as it duplicates SimpleMetricHandler)
