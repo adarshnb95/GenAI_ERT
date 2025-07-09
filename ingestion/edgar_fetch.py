@@ -58,6 +58,27 @@ def get_cik_for_ticker(ticker: str) -> Optional[str]:
         }
     return _cik_map.get(ticker)
 
+def download_filing_index(
+    cik: str,
+    accession: str,
+    filename: str,
+    dest_dir: Path,
+) -> Path:
+    """
+    Download https://data.sec.gov/Archives/edgar/data/{cik}/{accession}/index.json
+    into dest_dir/filename and return that Path.
+    """
+    # ensure directory exists
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    idx_url = f"https://data.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/index.json"
+    resp = requests.get(idx_url, headers=HEADERS)
+    resp.raise_for_status()
+
+    idx_path = dest_dir / filename
+    idx_path.write_text(json.dumps(resp.json(), indent=2), encoding="utf-8")
+    return idx_path
+
 def get_latest_filings(
     cik: str,
     form_types: tuple = ("10-K", "10-Q"),
@@ -211,3 +232,35 @@ def fetch_for_ticker(
 
     print(f"[edgar_fetch] Fetched {len(saved)} filings for {ticker}")
     return saved
+
+def fetch_xbrl_for_year(
+    ticker: str,
+    year: int,
+    form_type: str = "10-K",
+) -> Optional[Path]:
+    """
+    Fetch the single XBRL (XML/HTML) for `ticker`’s Form `form_type` in `year`.
+    Returns the Path to the downloaded filing, or None if none found.
+    """
+    cik = get_cik_for_ticker(ticker)
+    if not cik:
+        return None
+
+    # 1) find the right accession (Q4/form_type) in that year
+    filings = get_latest_filings(cik, form_types=(form_type,), count=100)
+    target = None
+    for f in filings:
+        if f["form"] == form_type and f["date"].startswith(str(year)):
+            target = f["accession"]
+            break
+    if not target:
+        return None
+
+    # 2) download the index.json
+    out_dir = DATA_ROOT / ticker.upper() / str(year)
+    idx_filename = f"{ticker.upper()}-{target}-index.json"
+    idx_path = download_filing_index(cik, target, idx_filename, out_dir)
+
+    # 3) pick and download the instance document
+    inst = choose_and_download(cik, target, str(idx_path), dest_dir=out_dir)
+    return Path(inst) if inst else None

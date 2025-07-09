@@ -1,6 +1,6 @@
 import re, xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, Sequence
 from datetime import datetime
 import logging
 import json
@@ -97,6 +97,27 @@ def get_metric_for_year(
         tagname = elem.tag.split("}", 1)[-1]
         if tagname == tag:
             text = (elem.text or "").strip()
+            if text.isdigit():
+                return int(text)
+    return None
+
+def parse_xbrl_metric(xbrl_path: Path, tags: Sequence[str]) -> Optional[int]:
+    """
+    Given a path to an XBRL XML file and a list of element names (no namespace),
+    find the first matching tag in the document and return its integer value,
+    or None if not found or non-numeric.
+    """
+    try:
+        tree = ET.parse(str(xbrl_path))
+    except ET.ParseError:
+        return None
+
+    root = tree.getroot()
+    for elem in root.findall(".//*"):
+        # strip namespace
+        name = elem.tag.split("}", 1)[-1]
+        if name in tags:
+            text = (elem.text or "").strip().replace(",", "")
             if text.isdigit():
                 return int(text)
     return None
