@@ -233,34 +233,60 @@ def fetch_for_ticker(
     print(f"[edgar_fetch] Fetched {len(saved)} filings for {ticker}")
     return saved
 
-def fetch_xbrl_for_year(
-    ticker: str,
-    year: int,
-    form_type: str = "10-K",
-) -> Optional[Path]:
+def fetch_xbrl_for_year(ticker: str, year: int, form_type: str = "10-K") -> Optional[Path]:
     """
-    Fetch the single XBRL (XML/HTML) for `ticker`’s Form `form_type` in `year`.
-    Returns the Path to the downloaded filing, or None if none found.
+    Find the one filing of type form_type in `year` for this ticker,
+    download its index.json and XBRL instance, and return the Path to the .xml.
     """
     cik = get_cik_for_ticker(ticker)
     if not cik:
         return None
 
-    # 1) find the right accession (Q4/form_type) in that year
-    filings = get_latest_filings(cik, form_types=(form_type,), count=100)
-    target = None
-    for f in filings:
-        if f["form"] == form_type and f["date"].startswith(str(year)):
-            target = f["accession"]
-            break
+    # 1) pull its filings list
+    filings = get_latest_filings(cik, form_types=(form_type,), count=1000)
+    # look for the first one whose 'date' starts with our year
+    target = next((f for f in filings if f["date"].startswith(str(year))), None)
     if not target:
         return None
 
-    # 2) download the index.json
-    out_dir = DATA_ROOT / ticker.upper() / str(year)
-    idx_filename = f"{ticker.upper()}-{target}-index.json"
-    idx_path = download_filing_index(cik, target, idx_filename, out_dir)
+    accession = target["accession"]
+    dest_dir = DATA_ROOT / ticker / str(year)
+    dest_dir.mkdir(parents=True, exist_ok=True)
 
-    # 3) pick and download the instance document
-    inst = choose_and_download(cik, target, str(idx_path), dest_dir=out_dir)
-    return Path(inst) if inst else None
+    # 2) download index.json
+    idx_filename = f"{ticker}-{accession}-index.json"
+    idx_path = download_filing_index(cik, accession, idx_filename, dest_dir)
+
+    # 3) pick & download the XBRL instance
+    xml_path = choose_and_download(
+        cik,
+        accession,
+        str(idx_path),
+        dest_dir=dest_dir
+    )
+    return xml_path
+
+HEADERS = {"User-Agent": "GenAI_ERT"}  # or whatever you’re already using
+
+def download_filing_index(
+    cik: str,
+    accession: str,
+    idx_filename: str,
+    dest_dir: Path
+) -> Path:
+    """
+    Download the EDGAR index.json for this (CIK, accession), save it as dest_dir/idx_filename,
+    and return that Path. Raises on any HTTP error.
+    """
+    # EDGAR stores filings under /edgar/data/<integer CIK>/
+    # and then a folder named by the accession with dashes removed.
+    # e.g. accession "0000320193-20-000096" → folder "000032019320000096"
+    clean_acc = accession.replace("-", "")
+    idx_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{clean_acc}/{idx_filename}"
+    out_path = dest_dir / idx_filename
+
+    resp = requests.get(idx_url, headers=HEADERS)
+    resp.raise_for_status()
+
+    out_path.write_text(resp.text, encoding="utf-8")
+    return out_path
