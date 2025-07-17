@@ -6,7 +6,15 @@ import uvicorn
 import re
 from summarization.summarize import build_faiss_index_for_ticker, summarize_text, retrieve_context_for_ticker
 # Ingestion functions
-from ingestion.edgar_fetch import get_latest_filings, choose_and_download, fetch_for_ticker
+from ingestion.edgar_fetch import (
+    get_latest_filings, 
+    choose_and_download, 
+    fetch_for_ticker, 
+    fetch_financial_fact,
+    get_cik_for_ticker,
+    fetch_xbrl_for_year,
+    extract_fact_request
+)
 # Classification utility
 from classifier.predict import classify_text
 from api.ask_handlers import ASK_HANDLERS
@@ -18,6 +26,17 @@ import logging
 
 # Summarization placeholder (to be implemented)
 # from summarization.summarize import summarize_text
+
+METRIC_LABELS = {
+    "NetIncomeLoss": "net income",
+    "Revenues": "revenue",
+    "OperatingIncomeLoss": "operating income",
+    "NetCashProvidedByUsedInOperatingActivities": "operating cash flow",
+    "EarningsPerShareBasic": "basic EPS",
+    "Assets": "total assets",
+    "Liabilities": "total liabilities",
+    "StockholdersEquity": "shareholders’ equity",
+}
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -130,21 +149,37 @@ async def ask(req: AskRequest):
         raise HTTPException(400, "No tickers found in your question.")
     logger.info(f"[ask] detected tickers: {tickers}")
 
-    # 2) short-circuit simple year-metric questions
+    # 2) fact-check branch (any single-value XBRL metric + year)
+    metric_key, year, period = extract_fact_request(question)
+    if tickers and metric_key and year:
+        label = METRIC_LABELS.get(metric_key, metric_key)
+        logger.info(f"[ask] fact-check lookup: {metric_key} for {tickers[0]} in {year}")
+        cik = get_cik_for_ticker(tickers[0])
+        if not cik:
+            raise HTTPException(404, f"CIK not found for {tickers[0]}")
+        try:
+            value = fetch_financial_fact(cik, metric_key, year, period)
+            return {"answer": f"{tickers[0]}'s {label} in {period} {year} was ${value:,}"}
+        except KeyError as e:
+            raise HTTPException(404, str(e))
+
+    # 3) fallback to any other simple-metric handler you might still have
     if SimpleMetricHandler.can_handle(question):
         logger.info("[ask] matched SimpleMetricHandler — skipping FAISS/classifier.")
         return SimpleMetricHandler.handle(tickers, question)
 
-    # 3) Otherwise kick off ingestion/indexing in background threads
+    # 4) ingestion + indexing
     for ticker in tickers:
         await run_in_threadpool(
-            partial(fetch_for_ticker, ticker, count=req.count, form_types=tuple(req.form_types))
+            partial(fetch_for_ticker, ticker,
+                    count=req.count,
+                    form_types=tuple(req.form_types))
         )
         await run_in_threadpool(
             partial(build_faiss_index_for_ticker, ticker, reset=False)
         )
 
-    # 4) Now try the rest of your handlers (including classifier/RAG fallback)
+    # 5) remaining handlers (classifier/RAG)
     for handler in ASK_HANDLERS:
         if handler.can_handle(question):
             logger.info(f"[ask] dispatching to {handler.__class__.__name__}")
