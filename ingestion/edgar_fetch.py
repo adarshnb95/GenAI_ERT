@@ -1,10 +1,15 @@
 # File: ingestion/edgar_fetch.py
 import json, os
+import re
+
+print(f"🛠️  Loading edgar_fetch from {__file__}")
+
 import requests
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import boto3
 import logging
+from datetime import datetime
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,9 +22,12 @@ CIK_JSON_URL = "https://www.sec.gov/files/company_tickers.json"
 XBRL_EXCLUDE = ("_cal.xml", "_def.xml", "_lab.xml", "_pre.xml", "_htm.xml")
 
 HEADERS = {
-    "User-Agent": "Your Name your.email@example.com",
-    "Accept": "application/json"
+    "User-Agent": "Adarsh Bhandary (adarshnb95@gmail.com)",
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip, deflate"
 }
+
+print("🛠️  HEADERS right after import:", HEADERS)
 
 # Where to store filings
 DATA_ROOT = Path(__file__).parent / "data"
@@ -56,7 +64,7 @@ def get_cik_for_ticker(ticker: str) -> Optional[str]:
             entry["ticker"]: str(entry["cik_str"]).zfill(10)
             for entry in data.values()
         }
-    return _cik_map.get(ticker)
+    return _cik_map.get(ticker.upper())
 
 def download_filing_index(
     cik: str,
@@ -88,7 +96,14 @@ def get_latest_filings(
     Fetch recent filings JSON for a CIK. Returns up to `count` filings matching `form_types`.
     """
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-    resp = requests.get(url, headers=HEADERS)
+    # DEBUG: show the headers you’re about to send
+    print("🛠️  HEADERS at filings call:", HEADERS)
+
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+
+    # DEBUG: confirm what actually went out
+    print("→ Outgoing headers:", resp.request.headers)
+
     resp.raise_for_status()
     recent = resp.json().get("filings", {}).get("recent", {})
 
@@ -266,7 +281,7 @@ def fetch_xbrl_for_year(ticker: str, year: int, form_type: str = "10-K") -> Opti
     )
     return xml_path
 
-HEADERS = {"User-Agent": "GenAI_ERT"}  # or whatever you’re already using
+# HEADERS = {"User-Agent": "GenAI_ERT"}  # or whatever you’re already using
 
 def download_filing_index(
     cik: str,
@@ -290,3 +305,62 @@ def download_filing_index(
 
     out_path.write_text(resp.text, encoding="utf-8")
     return out_path
+
+
+
+def fetch_financial_fact(cik: str, fact_name: str, year: int, period: str = "FY") -> float:
+    url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+    resp.raise_for_status()
+    facts = resp.json()["facts"]["us-gaap"][fact_name]["units"]["USD"]
+    for item in facts:
+        if item.get("fp") == period and item.get("fy") == year:
+            return item["val"]
+    raise KeyError(f"{fact_name} for {period} {year} not found")
+
+# Mapping of metric keys to human-readable labels
+FACT_METRICS = {
+    "NetIncomeLoss": ["earn", "earnings", "income", "net income", "profit"],
+    "Revenues":       ["revenue", "sales", "turnover"],
+
+    # new metrics:
+    "OperatingIncomeLoss": [
+      "operating income", "operatingprofit"
+    ],
+    "NetCashProvidedByUsedInOperatingActivities": [
+      "cash flow", "cash from operations", "operating cash flow"
+    ],
+    "EarningsPerShareBasic": [
+      "eps", "earnings per share", "basic eps"
+    ],
+    "Assets": [
+      "assets", "total assets"
+    ],
+    "Liabilities": [
+      "liabilities", "total liabilities"
+    ],
+    "StockholdersEquity": [
+      "equity", "shareholders’ equity", "stockholders equity"
+    ]
+}
+
+def extract_fact_request(question: str):
+    q = question.lower()
+    # 1) year or relative:
+    m_rel = re.search(r"\blast year\b", q)
+    if m_rel:
+        year = datetime.now().year - 1
+    else:
+        m_year = re.search(r"\b(19|20)\d{2}\b", q)
+        year = int(m_year.group(0)) if m_year else None
+
+    # 2) quarter
+    m_q = re.search(r"\bq([1-4])\b", q)
+    period = f"Q{m_q.group(1)}" if m_q else "FY"
+
+    # 3) metric
+    for tag, keywords in FACT_METRICS.items():
+        if any(kw in q for kw in keywords):
+            return tag, year, period
+
+    return None, None, None
