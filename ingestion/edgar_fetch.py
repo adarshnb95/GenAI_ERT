@@ -2,7 +2,6 @@
 import json, os
 import re
 
-print(f"🛠️  Loading edgar_fetch from {__file__}")
 
 import requests
 from pathlib import Path
@@ -27,7 +26,6 @@ HEADERS = {
     "Accept-Encoding": "gzip, deflate"
 }
 
-print("🛠️  HEADERS right after import:", HEADERS)
 
 # Where to store filings
 DATA_ROOT = Path(__file__).parent / "data"
@@ -97,12 +95,10 @@ def get_latest_filings(
     """
     url = f"https://data.sec.gov/submissions/CIK{cik}.json"
     # DEBUG: show the headers you’re about to send
-    print("🛠️  HEADERS at filings call:", HEADERS)
 
     resp = requests.get(url, headers=HEADERS, timeout=10)
 
     # DEBUG: confirm what actually went out
-    print("→ Outgoing headers:", resp.request.headers)
 
     resp.raise_for_status()
     recent = resp.json().get("filings", {}).get("recent", {})
