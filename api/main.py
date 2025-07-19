@@ -138,6 +138,30 @@ async def summarize(request: ClassifyRequest):
 
 YEAR_PATTERN = re.compile(r"\b(20\d{2})\b")
 
+HELP_PATTERNS = [
+    r"\bhelp\b",
+    r"\bwhat can you do\b",
+    r"\bwhat information can you give\b",
+    r"\bhow (do|can) i (use|ask)\b",
+    r"\bwhat are your capabilities\b",
+    r"\btell me about( yourself)?\b",
+    r"\bhow (does|do) this work\b",
+    r"\busage\b",
+    r"\bguide\b",
+]
+
+HELP_ANSWER = (
+    "I can:\n"
+    "- Instantly fetch single-value facts (revenue, net income, EPS, assets, etc.) via the SEC’s XBRL API\n"
+    "- Ingest and index SEC filings (10-K, 10-Q, N-2) into a FAISS search engine\n"
+    "- Answer deeper “why” or “explain” questions with classification, embedding, and RAG-driven summarization\n"
+    "- Streamline simple metric queries for speed, and fall back to full NLP only when needed\n\n"
+    "Try asking things like:\n"
+    "• “What did Apple earn in 2020?”\n"
+    "• “Explain why revenue grew in Q2.”\n"
+    "• “Show me Apple’s asset breakdown.”"
+)
+
 @app.post("/ask")
 async def ask(req: AskRequest):
     question = req.text.strip()
@@ -148,6 +172,11 @@ async def ask(req: AskRequest):
     if not tickers:
         raise HTTPException(400, "No tickers found in your question.")
     logger.info(f"[ask] detected tickers: {tickers}")
+
+    # 1b) generic “help” / meta questions
+    for pat in HELP_PATTERNS:
+        if re.search(pat, question, re.IGNORECASE):
+            return {"answer": HELP_ANSWER}
 
     # 2) fact-check branch (any single-value XBRL metric + year)
     metric_key, year, period = extract_fact_request(question)
