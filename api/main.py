@@ -24,6 +24,14 @@ from functools import partial
 from pydantic import BaseModel
 import logging
 
+from api.routers import fundamentals, technicals, sentiment
+
+app = FastAPI()
+
+app.include_router(fundamentals.router)
+app.include_router(technicals.router)
+app.include_router(sentiment.router)
+
 # Summarization placeholder (to be implemented)
 # from summarization.summarize import summarize_text
 
