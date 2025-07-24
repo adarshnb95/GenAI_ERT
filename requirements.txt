@@ -20,3 +20,4 @@ awscli
 starlette
 moto
 pytest
+yfinance

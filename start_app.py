@@ -46,7 +46,7 @@ def main():
     # 3) Launch Streamlit
     streamlit_cmd = [
         "streamlit", "run",
-        "dashboard/dashboard_app.py",
+        "ui/streamlit_app.py",
         "--server.port", "8501"
     ]
     streamlit_proc = subprocess.Popen(streamlit_cmd)
